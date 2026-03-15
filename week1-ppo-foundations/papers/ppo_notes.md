@@ -10,8 +10,7 @@ Use log-prob for ratio to avoid NaN
 
 $r_t = torch.exp(log(p_new) - log(p_old))$
 
-$\mathcal{L} = -(min(r_t.A, 
-clip(r_t, 1-\epsilon, 1+\epsilon).A)).mean()$
+$\mathcal{L} = -(min(r_t.A, clip(r_t, 1-\epsilon, 1+\epsilon).A)).mean()$
 
 
 ### Hyperparameters: 
