@@ -28,12 +28,26 @@ def rm_loss(r_w, r_l):
 ```
 
 ### PPO Objective
-For each completion pair (prompt, sequence) generated during the rollout, calculating the loss per-token:
+For each completion pair (prompt, sequence) generated during the rollout, calculate the loss per-token.
 
+**1. Calculate Advantages:**
+The Reward Model scalar `r_rm` and the KL divergence penalty `beta_kl` are used to define the reward at each token $t$. These rewards are passed through Generalized Advantage Estimation (GAE) to give us our per-token advantages.
 ```python
-# RLHF PPO Objective
-# L_ppo   = elementwise clipped(r_rm + adv_gae - beta_kl)
-# L_ptx   = -mean(log_prob(target_token))
-# L_total = L_ppo + gamma * L_ptx
+# rewards_t = -beta * kl_t
+# rewards_final = r_rm - beta * kl_final
+# adv_gae = calculate_gae(rewards)
 ```
-*(Note: I expanded your GAE/KL notation slightly to reflect that the GAE advantage `adv_gae` is what actually gets clipped, and the KL divergence acts as a per-token negative reward prior to the GAE calculation).*
+
+**2. The Clipped Surrogate Objective:**
+The final PPO objective only multiplies the probability ratio by the pre-calculated advantage:
+```python
+# ratio = pi_new(token) / pi_old(token)
+# L_ppo_clipped_objective = -mean( min(ratio * adv_gae, clipped_ratio * adv_gae) )
+```
+
+**3. Total Objective:**
+Summing the PPO gradients with the Pretraining Mix (PTX):
+```python
+# L_ptx   = -mean(log_prob(target_token))
+# L_total = L_ppo_clipped_objective + gamma * L_ptx
+```
