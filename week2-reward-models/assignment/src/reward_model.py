@@ -13,6 +13,10 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
+EPOCHS = 1
+BATCH_SIZE = 4
+MODEL_NAME = "Qwen/Qwen2-0.5B-Instruct"
+DATASET_NAME = "Anthropic/hh-rlhf"
 
 
 def init_model(model_name: str):
@@ -32,56 +36,103 @@ def train_model():
     """
     Train the model
     """
-    pass
+    print("Training model...")
+    print("Model name: ", MODEL_NAME)
+    print("Dataset name: ", DATASET_NAME)
+    print("Batch size: ", BATCH_SIZE)
+    print("Epochs: ", EPOCHS)
+    print("Device: ", DEVICE)
 
+    model, tokenizer = init_model(MODEL_NAME)
+    optimizer = optim.Adam(model.parameters(), lr=1e-5)
 
-def evaluate_model(model, tokenizer):
-    """
-    Evaluate the Reward Model on test split of dataset
-    """
-    dataset = RLHFDataset("Anthropic/hh-rlhf", "test", tokenizer)
-    dataloader = create_dataloader(dataset, batch_size=16, shuffle=False)
-
+    dataset = RLHFDataset(DATASET_NAME, "train", tokenizer)
+    dataloader = create_dataloader(dataset, batch_size=BATCH_SIZE, shuffle=True)
     print("Length of dataset: ", len(dataset))
     print("Length of dataloader: ", len(dataloader))
 
+    # train loop
+    for epoch in range(EPOCHS):
+        print(f"Epoch {epoch+1}/{EPOCHS}")
+        for i, batch in enumerate(dataloader):
+            # forward pass
+            winner_rewards, loser_rewards = forward_pass(model, batch)  # (B)
+            # loss fn - Bradley-Terry (binary cross-entropy / NLL)
+            loss = -torch.log(torch.sigmoid(winner_rewards - loser_rewards)).mean()
+            # backward pass
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
+            # print loss every 10 batches
+            if i % 10 == 0:
+                print(f"Batch {i} loss: ", loss.item())
+                break
+
+        # run evaluation
+        evaluate_model(model, tokenizer, no_of_batch=1)
+    
+    print("Training complete.")
+    # full evaluation on test set
+    print("Full evaluation on test set")
+    evaluate_model(model, tokenizer, no_of_batch=10)
+    print("Done.")
+
+        
+def forward_pass(model, batch):
+    """
+    Performs a forward pass through the model and returns the reward scores.
+    """
+    winner_batch, loser_batch = batch
+    winner_output = model(
+        input_ids=winner_batch[0].to(DEVICE), attention_mask=winner_batch[1].to(DEVICE)
+    )   # (B, S, 1)
+    loser_output = model(
+        input_ids=loser_batch[0].to(DEVICE), attention_mask=loser_batch[1].to(DEVICE)
+    )   # (B, S, 1)
+    """
+    # NOTE - Use output of last token as predicted sequence "reward" from RM.
+    # The transformer outputs one scaler value for each input token position.
+    # We use the last token's scaler output as the RM reward output
+    # as the last position "sees" the entire text. 
+    """
+    # finding the last non-pad token. Sequence is right-padded.
+    last_winner_token = (winner_batch[1].sum(dim=-1) - 1).unsqueeze(-1).unsqueeze(-1).to(DEVICE) # (B,1,1)
+    last_loser_token = (loser_batch[1].sum(dim=-1) - 1).unsqueeze(-1).unsqueeze(-1).to(DEVICE)
+    # logits (B,S,1)
+    # Gather scalar values from the exact last sequence index and squeeze to 1D array
+    winner_rewards = winner_output.logits.gather(dim=1, index=last_winner_token).squeeze()    # (B)
+    loser_rewards = loser_output.logits.gather(dim=1, index=last_loser_token).squeeze()       # (B)
+    return winner_rewards, loser_rewards
+
+
+def evaluate_model(model, tokenizer, no_of_batch=0):
+    """
+    Evaluate the Reward Model on test split of dataset
+    """
+    dataset = RLHFDataset(DATASET_NAME, "test", tokenizer)
+    dataloader = create_dataloader(dataset, batch_size=BATCH_SIZE, shuffle=False)
     accuracy = []
     with torch.no_grad():
-        for i, batch in enumerate(dataloader):
-            if i >= 10:
+        for i, batch in enumerate(dataloader): 
+            if no_of_batch > 0 and i >= no_of_batch:
                 break
-            winner_batch, loser_batch = batch
-            winner_output = model(
-                input_ids=winner_batch[0].to(DEVICE), attention_mask=winner_batch[1].to(DEVICE)
-            )
-            loser_output = model(
-                input_ids=loser_batch[0].to(DEVICE), attention_mask=loser_batch[1].to(DEVICE)
-            )
-            """
-            # NOTE - Use output of last token as predicted "reward" from RM.
-            The transformer outputs one scaler value for each input token position.
-            We use the last token's scaler output as the RM reward output
-            as it "sees" the entire text. 
-            """
-            # finding the last non-pad token. Sequence is right-padded.
-            last_winner_token = (winner_batch[1].sum(dim=-1) - 1).unsqueeze(-1).unsqueeze(-1).to(DEVICE) # (B,1,1)
-            last_loser_token = (loser_batch[1].sum(dim=-1) - 1).unsqueeze(-1).unsqueeze(-1).to(DEVICE)
-            # logits (B,S,1)
-            # Gather scalar values from the exact last sequence index and squeeze to 1D array
-            winner_rewards = winner_output.logits.gather(dim=1, index=last_winner_token).squeeze().float().cpu().numpy()    # (B)
-            loser_rewards = loser_output.logits.gather(dim=1, index=last_loser_token).squeeze().float().cpu().numpy()       # (B)
+            winner_rewards, loser_rewards = forward_pass(model, batch)
+            print("Winner rewards: ", winner_rewards)
+            print("Loser rewards: ", loser_rewards)
+            winner_rewards = winner_rewards.float().cpu().numpy()
+            loser_rewards = loser_rewards.float().cpu().numpy()
             # NOTE - accuracy calculation as per Bradley-Terry preference objective
             accuracy_batch = (winner_rewards > loser_rewards).astype(int)
             accuracy.append(accuracy_batch)
-            print(f"Batch {i} accuracy: ", np.mean(accuracy_batch))
 
     accuracy = np.concatenate(accuracy) 
     print("Accuracy: ", np.mean(accuracy))
- 
 
 
 if __name__ == "__main__":
     #"TinyLlama/TinyLlama-1.1B-Chat-v1.0" # "Qwen/Qwen2-0.5B-Instruct" "google/gemma-3-1b-it"
-    model_name = "Qwen/Qwen2-0.5B-Instruct"
-    model, tokenizer = init_model(model_name)
-    evaluate_model(model, tokenizer)
+    # model, tokenizer = init_model(MODEL_NAME)
+    # evaluate_model(model, tokenizer)
+    train_model()

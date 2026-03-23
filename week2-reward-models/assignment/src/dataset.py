@@ -1,7 +1,9 @@
-import torch
-import math
-from torch.utils.data import Dataset, DataLoader
 from typing import Dict, Any, List, Tuple
+import math
+import torch
+from torch.utils.data import Dataset, DataLoader
+from datasets import load_dataset
+
 
 class RLHFDataset(Dataset):
     """
@@ -24,7 +26,7 @@ class RLHFDataset(Dataset):
         self.data = self._load_data()
 
     def _load_data(self) -> Any:
-        from datasets import load_dataset
+        
         # Load the dataset using the HuggingFace datasets library
         dataset = load_dataset(self.data_path)
         return dataset[self.split]
