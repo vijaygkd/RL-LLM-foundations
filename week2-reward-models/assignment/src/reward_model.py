@@ -13,10 +13,11 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
+DATASET_NAME = "Anthropic/hh-rlhf"
+MODEL_NAME = "Qwen/Qwen2-0.5B-Instruct"
+# TODO - update before full run
 EPOCHS = 1
 BATCH_SIZE = 4
-MODEL_NAME = "Qwen/Qwen2-0.5B-Instruct"
-DATASET_NAME = "Anthropic/hh-rlhf"
 
 
 def init_model(model_name: str):
@@ -53,12 +54,13 @@ def train_model():
 
     # train loop
     for epoch in range(EPOCHS):
+        model.train()
         print(f"Epoch {epoch+1}/{EPOCHS}")
         for i, batch in enumerate(dataloader):
             # forward pass
             winner_rewards, loser_rewards = forward_pass(model, batch)  # (B)
             # loss fn - Bradley-Terry (binary cross-entropy / NLL)
-            loss = -torch.log(torch.sigmoid(winner_rewards - loser_rewards)).mean()
+            loss = -torch.nn.functional.logsigmoid(winner_rewards - loser_rewards).mean()
             # backward pass
             optimizer.zero_grad()
             loss.backward()
@@ -68,13 +70,14 @@ def train_model():
             # print loss every 10 batches
             if i % 10 == 0:
                 print(f"Batch {i} loss: ", loss.item())
-                break
+                break   # TODO - remove this break
 
         # run evaluation
         evaluate_model(model, tokenizer, no_of_batch=1)
     
     print("Training complete.")
     # full evaluation on test set
+    print("-" * 30)
     print("Full evaluation on test set")
     evaluate_model(model, tokenizer, no_of_batch=10)
     print("Done.")
@@ -111,6 +114,7 @@ def evaluate_model(model, tokenizer, no_of_batch=0):
     """
     Evaluate the Reward Model on test split of dataset
     """
+    model.eval()
     dataset = RLHFDataset(DATASET_NAME, "test", tokenizer)
     dataloader = create_dataloader(dataset, batch_size=BATCH_SIZE, shuffle=False)
     accuracy = []
@@ -119,8 +123,6 @@ def evaluate_model(model, tokenizer, no_of_batch=0):
             if no_of_batch > 0 and i >= no_of_batch:
                 break
             winner_rewards, loser_rewards = forward_pass(model, batch)
-            print("Winner rewards: ", winner_rewards)
-            print("Loser rewards: ", loser_rewards)
             winner_rewards = winner_rewards.float().cpu().numpy()
             loser_rewards = loser_rewards.float().cpu().numpy()
             # NOTE - accuracy calculation as per Bradley-Terry preference objective
