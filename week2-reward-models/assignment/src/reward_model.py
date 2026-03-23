@@ -18,6 +18,7 @@ MODEL_NAME = "Qwen/Qwen2-0.5B-Instruct"
 # TODO - update before full run
 EPOCHS = 1
 BATCH_SIZE = 4
+LR = 1e-5
 
 
 def init_model(model_name: str):
@@ -45,7 +46,7 @@ def train_model():
     print("Device: ", DEVICE)
 
     model, tokenizer = init_model(MODEL_NAME)
-    optimizer = optim.Adam(model.parameters(), lr=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=LR)
 
     dataset = RLHFDataset(DATASET_NAME, "train", tokenizer)
     dataloader = create_dataloader(dataset, batch_size=BATCH_SIZE, shuffle=True)
@@ -73,13 +74,13 @@ def train_model():
                 break   # TODO - remove this break
 
         # run evaluation
-        evaluate_model(model, tokenizer, no_of_batch=1)
+        evaluate_model(model, tokenizer, no_of_batch=1) # TODO - update before full run
     
     print("Training complete.")
     # full evaluation on test set
     print("-" * 30)
     print("Full evaluation on test set")
-    evaluate_model(model, tokenizer, no_of_batch=10)
+    evaluate_model(model, tokenizer, no_of_batch=10)    # TODO - update before full run
     print("Done.")
 
         
@@ -138,3 +139,12 @@ if __name__ == "__main__":
     # model, tokenizer = init_model(MODEL_NAME)
     # evaluate_model(model, tokenizer)
     train_model()
+
+
+"""
+Agent TODOs:
+Note- the logistical code, keep is as seperate as possible from core training / ML code that is core to the assignment.
+1. Add telemetry - log training loss, val / test accuracy, etc. and plot at the end. Save plot to file as assignment artifact.
+2. Because batch size is small, we gradient accumulate over 4 batches to simulate a larger batch size of 16.
+3. Adjust dataset truncation length. What is max / p95 / p99 sequence length in the dataset? 512 might be too small.    
+"""
