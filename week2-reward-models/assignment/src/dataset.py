@@ -9,7 +9,7 @@ class RLHFDataset(Dataset):
     """
     Dataset for training a Reward Model using the Anthropic/hh-rlhf dataset.
     """
-    def __init__(self, data_path: str, split: str, tokenizer: Any, max_length: int = 512):
+    def __init__(self, data_path: str, split: str, tokenizer: Any, max_length: int = 768):
         """
         Initializes the dataset.
 
@@ -162,13 +162,60 @@ def debug_dataset():
     print("-" * 30)
     print("Rejected response:\n", sample['rejected_text'])
 
+
+# ============================================================================
+# UTILITIES - Dataset analysis helpers (not part of core training pipeline)
+# ============================================================================
+
+def analyze_sequence_lengths(
+    data_path: str = "Anthropic/hh-rlhf",
+    tokenizer_name: str = "Qwen/Qwen2-0.5B-Instruct",
+    sample_size: int = 10000,
+):
+    """
+    Analyzes the token sequence length distribution of the dataset.
+    Use this to determine an appropriate max_length for truncation.
+
+    Results (Qwen2-0.5B-Instruct tokenizer, 10k sample):
+        p50=165, p90=423, p95=530, p99=835, max=1964
+        <= 512: 94.3%  |  <= 768: 98.6%  |  <= 1024: 99.5%
+    """
+    import random
+    import numpy as np
+    from transformers import AutoTokenizer
+    from tqdm import tqdm
+
+    print("Loading dataset and tokenizer...")
+    dataset = load_dataset(data_path)["train"]
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+
+    indices = random.sample(range(len(dataset)), min(sample_size, len(dataset)))
+    subset = dataset.select(indices)
+
+    lengths = []
+    for item in tqdm(subset, desc="Tokenizing"):
+        c_len = len(tokenizer.encode(item["chosen"], add_special_tokens=True))
+        r_len = len(tokenizer.encode(item["rejected"], add_special_tokens=True))
+        lengths.extend([c_len, r_len])
+
+    lengths = np.array(lengths)
+    print(f"\n--- Sequence Length Distribution ({len(lengths)} sequences) ---")
+    print(f"  Min:  {np.min(lengths)}")
+    print(f"  Mean: {np.mean(lengths):.1f}")
+    print(f"  p50:  {np.percentile(lengths, 50):.0f}")
+    print(f"  p75:  {np.percentile(lengths, 75):.0f}")
+    print(f"  p90:  {np.percentile(lengths, 90):.0f}")
+    print(f"  p95:  {np.percentile(lengths, 95):.0f}")
+    print(f"  p99:  {np.percentile(lengths, 99):.0f}")
+    print(f"  Max:  {np.max(lengths)}")
+    print(f"\n  % sequences <= 512:  {(lengths <= 512).mean()*100:.1f}%")
+    print(f"  % sequences <= 768:  {(lengths <= 768).mean()*100:.1f}%")
+    print(f"  % sequences <= 1024: {(lengths <= 1024).mean()*100:.1f}%")
+
+
 if __name__ == "__main__":
-    debug_dataset()
-
-
-"""
-TODO -
-1. what's the largest / p95 / p99 sequence length in the dataset? 512 might be too small.
-2. 
-
-"""
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--analyze":
+        analyze_sequence_lengths()
+    else:
+        debug_dataset()
