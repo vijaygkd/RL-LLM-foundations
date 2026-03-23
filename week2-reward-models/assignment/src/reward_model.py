@@ -32,10 +32,17 @@ def init_model(model_name: str):
     print("Loading model: ", model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(model_name)
-    model.requires_grad_(False)
-    # Train only last linear layer - to save memory and speed up training
+    # *****************************************************************************************
+    # replace last unembedding layer with single linear output layer for reward prediction
     model.lm_head = nn.Linear(model.lm_head.in_features, 1)
+    # *****************************************************************************************
+    # Freeze transformer layers
+    model.requires_grad_(False)
+    # Unfreeze last few transformer layers for fine-tuning
+    # for layer in model.model.layers[-4:]:
+    #     layer.requires_grad_(True)
     model.lm_head.requires_grad_(True)
+
     print(model)
     print("Trainable parameters: ", sum(p.numel() for p in model.parameters() if p.requires_grad))
     print("Total parameters: ", sum(p.numel() for p in model.parameters()))
@@ -73,10 +80,10 @@ def train_model():
         for i, batch in enumerate(tqdm(dataloader, desc="Training")):
             # forward pass
             winner_rewards, loser_rewards = forward_pass(model, batch)  # (B)
-            # *******************************************************************
+            # *****************************************************************************************
             # Bradley-Terry (binary cross-entropy / NLL)
             loss = -torch.nn.functional.logsigmoid(winner_rewards - loser_rewards).mean()
-            # *******************************************************************
+            # *****************************************************************************************
             # scale loss by accumulation steps so gradients average correctly
             scaled_loss = loss / GRAD_ACCUM_STEPS
             # backward pass (accumulate gradients)
@@ -121,7 +128,7 @@ def forward_pass(model, batch):
     loser_output = model(
         input_ids=loser_batch[0].to(DEVICE), attention_mask=loser_batch[1].to(DEVICE)
     )   # (B, S, 1)
-    # *******************************************************************
+    # *****************************************************************************************
     """
     # NOTE - Use output of last token as predicted sequence "reward" from RM.
     # The transformer outputs one scaler value for each input token position.
@@ -135,7 +142,7 @@ def forward_pass(model, batch):
     # Gather scalar values from the exact last sequence index and squeeze to 1D array
     winner_rewards = winner_output.logits.gather(dim=1, index=last_winner_token).squeeze()    # (B)
     loser_rewards = loser_output.logits.gather(dim=1, index=last_loser_token).squeeze()       # (B)
-    # *******************************************************************
+    # *****************************************************************************************
     return winner_rewards, loser_rewards
 
 
