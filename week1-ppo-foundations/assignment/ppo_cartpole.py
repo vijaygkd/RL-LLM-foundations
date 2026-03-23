@@ -176,8 +176,15 @@ class PPOAgent:
                 log_prob_new, entropy = self.policy.get_log_prob_entropy(states, actions) # (, 1)
                 values_new = self.policy.get_value(states).flatten()  # (b)
                 
-                # value target = old baseline + how much was discounted TD error based on rewards
-                # Alternative, sub-optimal way is to use sum actual future rewards, but it has high variance.
+                # NOTE: Critical (value model) target value.
+                # Reward: rewards received at current timestep. (aka. actual outcome)
+                # Return: total future discounted rewards. (aka. target value for critic)
+                # Adv = actual outcome (aka. target value) - expected baseline (aka. old value)
+                # Adv = (received rewards + discounted future returns) - expected baseline
+                # So the target value for critic training is 
+                # values_target = values_old (baseline) + adv (discoutned sum of future TD errors)
+                # Note - Alternative, sub-optimal way is to use sum actual future rewards (non-discounted), but it has high variance.
+                
                 values_target = values_old + adv     # ** Target for critic model. (b)
 
                 # PPO

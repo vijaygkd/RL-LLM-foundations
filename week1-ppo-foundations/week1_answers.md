@@ -24,5 +24,5 @@
 * In CartPole, the reward is collected from the environment at each step and is abundant. In an LLM with preference scores, the reward is only collected at the end of the entire sequence and is sparse. Thus, it's hard to attribute which intermediate tokens caused a high or low final score.
 * To bridge this gap, a separate reward model must be trained using human preference signals, which increases the difficulty of training the model.
 * Dense vs. sparse rewards: CartPole yields immediate, step-wise rewards; LLMs receive one sparse episodic reward at the end, creating a severe credit assignment problem.
-* RM ≠ Critic: the frozen Reward Model scores the completed text, while the active Critic predicts that final score token-by-token to calculate GAE.
+* RM ≠ Critic: the frozen Reward Model scores the completed text, while the active Critic predicts that final future "return" token-by-token to calculate GAE.
 * 4-model complexity: RLHF requires four distinct neural networks in memory simultaneously: an active Actor, an active Critic, a frozen Reward Model, and a frozen Reference Model.
