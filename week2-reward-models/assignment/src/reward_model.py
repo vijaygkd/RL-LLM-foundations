@@ -78,12 +78,13 @@ def train_model():
         print(f"Epoch {epoch+1}/{EPOCHS}")
         optimizer.zero_grad()
         for i, batch in enumerate(tqdm(dataloader, desc="Training")):
+            # *****************************************************************************************
             # forward pass
             winner_rewards, loser_rewards = forward_pass(model, batch)  # (B)
-            # *****************************************************************************************
+            
             # Bradley-Terry (binary cross-entropy / NLL)
             loss = -torch.nn.functional.logsigmoid(winner_rewards - loser_rewards).mean()
-            # *****************************************************************************************
+            
             # scale loss by accumulation steps so gradients average correctly
             scaled_loss = loss / GRAD_ACCUM_STEPS
             # backward pass (accumulate gradients)
@@ -94,23 +95,33 @@ def train_model():
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 optimizer.zero_grad()
-                
+
+            # *****************************************************************************************    
+            
                 # --- telemetry (logistical) ---
                 grad_step = (i + 1) // GRAD_ACCUM_STEPS
-                telemetry.log_loss(loss.item())
+                # Log loss less frequently to avoid noise (every 10 gradient steps)
                 if grad_step % 10 == 0:
-                    print(f"  grad_step {grad_step} | loss: {loss.item():.4f}")
-                    break   # TODO - remove this break
+                    telemetry.log_loss(grad_step, loss.item())
 
-        # run evaluation
-        acc = evaluate_model(model, tokenizer, no_of_batch=10)
-        telemetry.log_accuracy(acc)
+                # Print to console and run a very fast interim eval every 100 gradient steps
+                if grad_step % 100 == 0:
+                    print(f"  [Step {grad_step}] loss: {loss.item():.4f}")
+                    interim_acc = evaluate_model(model, tokenizer, no_of_batch=10) # fast subset eval
+                    telemetry.log_accuracy(grad_step, interim_acc)
+                    model.train() # restore train state after eval loop
+                    
+        # run end-of-epoch evaluation
+        epoch_acc = evaluate_model(model, tokenizer, no_of_batch=50)
+        telemetry.log_accuracy(grad_step, epoch_acc)
     
     print("Training complete.")
     # full evaluation on test set
     print("-" * 30)
     print("Full evaluation on test set")
-    evaluate_model(model, tokenizer)
+    test_acc = evaluate_model(model, tokenizer)
+    telemetry.set_final_benchmark(test_acc)
+    print("Test accuracy: ", test_acc)
 
     # --- telemetry (logistical) ---
     telemetry.plot(save_path="week2-reward-models/assignment/src/training_curves.png")
