@@ -109,6 +109,7 @@ def train_model():
                     print(f"  [Step {grad_step}] loss: {loss.item():.4f}")
                     interim_acc = evaluate_model(model, tokenizer, no_of_batch=10) # fast subset eval
                     telemetry.log_accuracy(grad_step, interim_acc)
+                    telemetry.plot(save_path="week2-reward-models/assignment/src/training_curves.png")
                     model.train() # restore train state after eval loop
                     
         # run end-of-epoch evaluation
