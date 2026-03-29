@@ -19,8 +19,8 @@ DATASET_NAME = "Anthropic/hh-rlhf"
 MODEL_NAME = "Qwen/Qwen2-0.5B-Instruct"
 # TODO - update before full run
 EPOCHS = 1
-BATCH_SIZE = 512
-GRAD_ACCUM_STEPS = 1  # effective batch size = BATCH_SIZE * GRAD_ACCUM_STEPS = 512
+BATCH_SIZE = 64
+GRAD_ACCUM_STEPS = 8  # effective batch size = BATCH_SIZE * GRAD_ACCUM_STEPS = 512
 LR = 1e-5
 
 
