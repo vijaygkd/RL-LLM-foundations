@@ -3,3 +3,5 @@ numpy
 torch
 tqdm
 matplotlib
+transformers
+datasets
