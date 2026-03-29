@@ -39,8 +39,8 @@ def init_model(model_name: str):
     # Freeze transformer layers
     model.requires_grad_(False)
     # Unfreeze last few transformer layers for fine-tuning
-    # for layer in model.model.layers[-4:]:
-    #     layer.requires_grad_(True)
+    for layer in model.model.layers[-4:]:
+        layer.requires_grad_(True)
     model.lm_head.requires_grad_(True)
 
     print(model)
