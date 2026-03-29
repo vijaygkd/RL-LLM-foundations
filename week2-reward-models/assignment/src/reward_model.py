@@ -19,8 +19,8 @@ DATASET_NAME = "Anthropic/hh-rlhf"
 MODEL_NAME = "Qwen/Qwen2-0.5B-Instruct"
 # TODO - update before full run
 EPOCHS = 1
-BATCH_SIZE = 64
-GRAD_ACCUM_STEPS = 8  # effective batch size = BATCH_SIZE * GRAD_ACCUM_STEPS = 512
+BATCH_SIZE = 512
+GRAD_ACCUM_STEPS = 1  # effective batch size = BATCH_SIZE * GRAD_ACCUM_STEPS = 512
 LR = 1e-5
 
 
@@ -47,7 +47,14 @@ def init_model(model_name: str):
     print("Trainable parameters: ", sum(p.numel() for p in model.parameters() if p.requires_grad))
     print("Total parameters: ", sum(p.numel() for p in model.parameters()))
 
-    return model.to(DEVICE, dtype=torch.bfloat16), tokenizer
+    model = model.to(DEVICE, dtype=torch.bfloat16)
+
+    # Optional: Compile model for faster training on CUDA (e.g. H100/H200)
+    if DEVICE.type == "cuda":
+        print("Compiling model for faster execution...")
+        model = torch.compile(model)
+
+    return model, tokenizer
 
 
 def train_model():
@@ -100,12 +107,12 @@ def train_model():
             
                 # --- telemetry (logistical) ---
                 grad_step = (i + 1) // GRAD_ACCUM_STEPS
-                # Log loss less frequently to avoid noise (every 10 gradient steps)
-                if grad_step % 10 == 0:
+                # Log loss less frequently to avoid noise (every 5 gradient steps)
+                if grad_step % 5 == 0:
                     telemetry.log_loss(grad_step, loss.item())
 
-                # Print to console and run a very fast interim eval every 100 gradient steps
-                if grad_step % 100 == 0:
+                # Print to console and run a very fast interim eval every 25 gradient steps
+                if grad_step % 25 == 0:
                     print(f"  [Step {grad_step}] loss: {loss.item():.4f}")
                     interim_acc = evaluate_model(model, tokenizer, no_of_batch=10) # fast subset eval
                     telemetry.log_accuracy(grad_step, interim_acc)
