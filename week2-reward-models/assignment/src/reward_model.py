@@ -19,8 +19,8 @@ DATASET_NAME = "Anthropic/hh-rlhf"
 MODEL_NAME = "Qwen/Qwen2-0.5B-Instruct"
 # Full run config for H200 (140gb)
 EPOCHS = 1
-BATCH_SIZE = 256
-GRAD_ACCUM_STEPS = 2  # effective batch size = BATCH_SIZE * GRAD_ACCUM_STEPS = 512
+BATCH_SIZE = 128
+GRAD_ACCUM_STEPS = 4  # effective batch size = BATCH_SIZE * GRAD_ACCUM_STEPS = 512
 LR = 1e-5
 
 
@@ -36,12 +36,12 @@ def init_model(model_name: str):
     # replace last unembedding layer with single linear output layer for reward prediction
     model.lm_head = nn.Linear(model.lm_head.in_features, 1)
     # *****************************************************************************************
-    # Freeze transformer layers
-    model.requires_grad_(False)
+    # Freeze transformer layers -- Optional for testing
+    # model.requires_grad_(False)
     # Unfreeze last few transformer layers for fine-tuning
-    for layer in model.model.layers[-4:]:
-        layer.requires_grad_(True)
-    model.lm_head.requires_grad_(True)
+    # for layer in model.model.layers[-4:]:
+    #     layer.requires_grad_(True)
+    # model.lm_head.requires_grad_(True)
 
     print(model)
     print("Trainable parameters: ", sum(p.numel() for p in model.parameters() if p.requires_grad))
