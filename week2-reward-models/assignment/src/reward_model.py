@@ -133,6 +133,13 @@ def train_model():
 
     # --- telemetry (logistical) ---
     telemetry.plot(save_path="week2-reward-models/assignment/src/training_curves.png")
+    
+    # Save the model and tokenizer for Week 3 RLHF
+    save_dir = "week2-reward-models/assignment/src/reward_model_checkpoint"
+    print(f"Saving finalized model and tokenizer to {save_dir}...")
+    model.save_pretrained(save_dir)
+    tokenizer.save_pretrained(save_dir)
+    
     print("Done.")
 
 
