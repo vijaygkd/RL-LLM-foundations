@@ -17,10 +17,10 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.ba
 print(f"Using device: {DEVICE}")
 DATASET_NAME = "Anthropic/hh-rlhf"
 MODEL_NAME = "Qwen/Qwen2-0.5B-Instruct"
-# TODO - update before full run
+# Full run config for H200 (140gb)
 EPOCHS = 1
-BATCH_SIZE = 64
-GRAD_ACCUM_STEPS = 8  # effective batch size = BATCH_SIZE * GRAD_ACCUM_STEPS = 512
+BATCH_SIZE = 256
+GRAD_ACCUM_STEPS = 2  # effective batch size = BATCH_SIZE * GRAD_ACCUM_STEPS = 512
 LR = 1e-5
 
 
