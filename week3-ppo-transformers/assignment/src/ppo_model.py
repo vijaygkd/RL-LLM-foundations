@@ -1,0 +1,58 @@
+from contextlib import contextmanager
+import torch
+from torch import nn
+from transformers import AutoModelForCausalLM
+
+class PPOModel(nn.Module):
+    """
+    Wrapper for pretrained causal LM model for PPO training.
+    Actor: Pretrained causal LM model
+    Critic: Pretrained causal LM model with linear scalar head.
+    
+    Note: The Actor and Critic will share the same transformer backbone weights.
+    This is the modern approach to PPO with LLMs, although the original RLHF paper
+    used separate models for actor and critic.
+    """
+    def __init__(self, model_name: str):
+        super().__init__()
+        self.actor = AutoModelForCausalLM.from_pretrained(model_name)
+        self.lm_head = self.actor.lm_head
+        self.value_head = nn.Linear(self.lm_head.in_features, 1).to(dtype=self.actor.dtype)
+
+    def forward(self, input_ids, attention_mask):
+        """
+        Returns LM logits and value estimates
+        """
+        with capture_inputs(self.actor.lm_head) as act:
+            lm_output = self.actor(input_ids, attention_mask)
+            lm_input = act["input"][0]
+
+        print("lm_input.shape: ", lm_input.shape)
+        value_output = self.value_head(lm_input)
+        return lm_output, value_output
+
+
+@contextmanager
+def capture_inputs(module):
+    """
+    Context manager to capture the inputs to a module.
+    """
+    activation = {}
+    hook = module.register_forward_pre_hook(
+        lambda m, i: activation.update({"input": i})
+    )
+    try:
+        yield activation
+    finally:
+        hook.remove()
+
+
+if __name__ == "__main__":
+    model = PPOModel("Qwen/Qwen2-0.5B-Instruct")
+    input_ids = torch.randint(0, 1000, (1, 10))
+    attention_mask = torch.ones((1, 10))
+    lm_output, value_output = model(input_ids, attention_mask)
+    print("lm_output.logits.shape: ", lm_output.logits.shape)
+    print("value_output.shape: ", value_output.shape)
+    print("value_output: ", value_output)
+    
