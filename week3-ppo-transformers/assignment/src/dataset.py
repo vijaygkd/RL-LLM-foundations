@@ -1,58 +1,83 @@
-import pandas as pd
 import torch
+from torch.utils.data import Dataset, DataLoader
 from datasets import load_dataset
 from transformers import PreTrainedTokenizer
 
 
-def load_imdb_dataset(split: str = "train") -> pd.DataFrame:
+class PromptsDataset(Dataset):
     """
-    Loads the stanfordnlp/imdb dataset and returns it as a DataFrame.
-
-    Args:
-        split: Dataset split to load - "train" or "test".
-
-    Returns:
-        DataFrame with columns ["text", "label"] where label 0=neg, 1=pos.
+    Wraps any HuggingFace text dataset, exposing each entry's raw text.
+    Tokenization is deferred to the collate_fn so that dynamic padding
+    is applied cleanly at the batch level.
     """
-    dataset = load_dataset("stanfordnlp/imdb", split=split)
-    return dataset.to_pandas()
+
+    def __init__(self, dataset_name: str, split: str = "train", text_column: str = "text"):
+        dataset = load_dataset(dataset_name, split=split)
+        self.texts = dataset[text_column]
+
+    def __len__(self) -> int:
+        return len(self.texts)
+
+    def __getitem__(self, idx: int) -> str:
+        return self.texts[idx]
 
 
-def sample_prompt_batch(
-    df: pd.DataFrame,
+class PromptCollator:
+    """
+    Collate function that tokenizes a batch of raw text strings and
+    truncates each to `prompt_token_len` leading tokens.
+    Passed directly to DataLoader as `collate_fn`.
+    """
+
+    def __init__(self, tokenizer: PreTrainedTokenizer, prompt_token_len: int = 8):
+        self.tokenizer = tokenizer
+        self.prompt_token_len = prompt_token_len
+
+    def __call__(self, batch: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+        encoded = self.tokenizer(
+            batch,
+            return_tensors="pt",
+            padding="max_length",
+            truncation=True,
+            max_length=self.prompt_token_len,
+        )
+        return encoded["input_ids"], encoded["attention_mask"]
+
+
+def build_prompt_dataloader(
     tokenizer: PreTrainedTokenizer,
+    dataset_name: str = "stanfordnlp/imdb",
+    split: str = "train",
     batch_size: int = 16,
     prompt_token_len: int = 8,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    shuffle: bool = True,
+    num_workers: int = 0,
+) -> DataLoader:
     """
-    Randomly samples a batch of prompts from the dataset.
-    Each prompt is truncated to the first `prompt_token_len` tokens,
-    forming the initial context for the PPO generation rollout.
+    Convenience factory that wires together the Dataset, Collator, and DataLoader.
 
     Args:
-        df: DataFrame returned by load_imdb_dataset().
-        tokenizer: The tokenizer for the actor model.
-        batch_size: Number of prompts to sample.
-        prompt_token_len: Number of leading tokens to retain as the prompt.
+        tokenizer: Actor model tokenizer. Must have pad_token set.
+        dataset_name: Any HuggingFace dataset identifier with a text column.
+        split: "train" or "test".
+        batch_size: Number of prompts per batch.
+        prompt_token_len: Number of leading tokens retained as the generation prompt.
+        shuffle: Whether to shuffle the dataset each epoch.
+        num_workers: Subprocess workers for data loading.
 
     Returns:
-        Tuple of (input_ids, attention_mask), each of shape (batch_size, prompt_token_len).
+        A DataLoader yielding (input_ids, attention_mask) tuples of shape
+        (batch_size, prompt_token_len).
     """
-    sample = df["text"].sample(n=batch_size).tolist()
-
-    # Tokenize without padding first to extract the leading prompt tokens
-    encoded = tokenizer(
-        sample,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=prompt_token_len,
+    dataset = PromptsDataset(dataset_name=dataset_name, split=split)
+    collator = PromptCollator(tokenizer=tokenizer, prompt_token_len=prompt_token_len)
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        collate_fn=collator,
+        num_workers=num_workers,
     )
-    # Truncate to exactly prompt_token_len tokens
-    input_ids = encoded["input_ids"][:, :prompt_token_len]
-    attention_mask = encoded["attention_mask"][:, :prompt_token_len]
-
-    return input_ids, attention_mask
 
 
 if __name__ == "__main__":
@@ -61,14 +86,11 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
     tokenizer.pad_token = tokenizer.eos_token
 
-    df = load_imdb_dataset(split="train")
-    print(f"Dataset size: {len(df)}")
-    print(df.head(2))
+    loader = build_prompt_dataloader(tokenizer, dataset_name="stanfordnlp/imdb", batch_size=4, prompt_token_len=8)
 
-    input_ids, attention_mask = sample_prompt_batch(df, tokenizer, batch_size=4)
-    print(f"\nPrompt input_ids shape: {input_ids.shape}")   # (4, 8)
-    print(f"Attention mask shape:   {attention_mask.shape}")
+    input_ids, attention_mask = next(iter(loader))
+    print(f"input_ids shape:      {input_ids.shape}")       # (4, 8)
+    print(f"attention_mask shape: {attention_mask.shape}")
 
-    # Decode to verify the prompts look like natural truncated text
     for i, ids in enumerate(input_ids):
         print(f"  Prompt {i}: {tokenizer.decode(ids)!r}")
