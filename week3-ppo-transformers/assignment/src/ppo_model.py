@@ -48,7 +48,10 @@ def capture_inputs(module):
 
 
 if __name__ == "__main__":
-    model = PPOModel("Qwen/Qwen2-0.5B-Instruct")
+    # "Qwen/Qwen3.5-0.8B" # "Qwen/Qwen3-0.6B" # "Qwen/Qwen2.5-0.5B-Instruct"
+    model_name = "Qwen/Qwen3-0.6B"
+    model = PPOModel(model_name)
+    print(model.actor)
     input_ids = torch.randint(0, 1000, (1, 10))
     attention_mask = torch.ones((1, 10))
     lm_output, value_output = model(input_ids, attention_mask)
