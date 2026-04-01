@@ -7,28 +7,37 @@ class PPOModel(nn.Module):
     """
     Wrapper for pretrained causal LM model for PPO training.
     Actor: Pretrained causal LM model
-    Critic: Pretrained causal LM model with linear scalar head.
+    Critic: Optional - Pretrained causal LM model with linear scalar head.
     
     Note: The Actor and Critic will share the same transformer backbone weights.
     This is the modern approach to PPO with LLMs, although the original RLHF paper
     used separate models for actor and critic.
     """
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, add_value_head: bool = True):
         super().__init__()
         self.actor = AutoModelForCausalLM.from_pretrained(model_name)
         self.lm_head = self.actor.lm_head
-        self.value_head = nn.Linear(self.lm_head.in_features, 1).to(dtype=self.actor.dtype)
+        self.value_head = None
+        if add_value_head:
+            self.value_head = nn.Linear(self.lm_head.in_features, 1).to(dtype=self.actor.dtype)
 
-    def forward(self, input_ids, attention_mask):
+    def forward(self, input_ids, attention_mask=None):
         """
         Returns LM logits and value estimates
+        input_ids: (B, T)
+        attention_mask: (B, T)
+        return 
+            lm_output: (B, T, V)
+            value_output: (B, T, 1)
         """
         with capture_inputs(self.actor.lm_head) as act:
             lm_output = self.actor(input_ids, attention_mask)
             lm_input = act["input"][0]
 
-        print("lm_input.shape: ", lm_input.shape)
-        value_output = self.value_head(lm_input)
+        value_output = None
+        if self.value_head is not None:
+            value_output = self.value_head(lm_input)
+        
         return lm_output, value_output
 
 
@@ -65,7 +74,7 @@ if __name__ == "__main__":
     generated_text = model.actor.generate(input_ids, do_sample=True, max_new_tokens=16)
     print("generated_text: ", tok.decode(generated_text[0]))
     
-"""
+    """
 Model list:
 openai-community/gpt2-xl (2B)
 Qwen/Qwen2.5-0.5B-Instruct (0.5B)
