@@ -14,31 +14,31 @@ class TrainingConfig:
     model_name: str
     reward_model_name: str
     # dataset
-    dataset_name: str = "stanfordnlp/imdb"
-    num_prompts: int = 8 #512             # TODO - ?? Might be better to generate large batch of rollouts in one go 
-                                        # to save inference time and reduce GPU wall-time. 
-                                        # Or should we do it in batches..?
-    gen_batch_size: int = 4 # 32
-    reward_batch_size: int = 4
-    num_rollouts_per_prompt: int = 1    # TODO - Do we need multiple rollouts per prompt? 
-    prompt_token_len: int = 8
-    max_new_tokens: int = 24            # T_total = T_prompt + T_new = 8 + 24 = 32
+    dataset_name: str               = "stanfordnlp/imdb"
+    num_prompts: int                = 8     #512             # TODO - ?? Might be better to generate large batch of rollouts in one go 
+                                                            # to save inference time and reduce GPU wall-time. 
+                                                            # Or should we do it in batches..?
+    gen_batch_size: int             = 4     # 32
+    reward_batch_size: int          = 4
+    num_rollouts_per_prompt: int    = 1     # TODO - Do we need multiple rollouts per prompt? 
+    prompt_token_len: int           = 8
+    max_new_tokens: int             = 24            # T_total = T_prompt + T_new = 8 + 24 = 32
     # training
-    ppo_steps: int = 1000
-    micro_steps: int = 4                # number of gradient updates per PPO step --> not needed maybe
-    micro_batch_size: int = 4
-    gradient_accumulation_steps: int = 4    # effective batch size = micro_batch_size * gradient_accumulation_steps = 16
+    ppo_steps: int                  = 1000
+    micro_steps: int                = 4             # number of gradient updates per PPO step --> not needed maybe
+    micro_batch_size: int           = 4
+    grad_accumulation_steps: int    = 4             # effective batch size = micro_batch_size * gradient_accumulation_steps = 16
     # hyper-parameters
-    clip_epsilon: float = 0.2
-    kl_beta: float = 0.01
-    gae_gamma: float = 0.99
-    gae_lambda: float = 0.95
-    value_loss_coef: float = 0.1
+    clip_epsilon: float             = 0.2
+    kl_beta: float                  = 0.01
+    gae_gamma: float                = 0.99
+    gae_lambda: float               = 0.95
+    value_loss_coef: float          = 0.1
     # optimizers
-    lr: float = 1e-6
+    lr: float                       = 1e-6
     # logging
-    log_freq: int = 10
-    save_freq: int = 100
+    log_freq: int                   = 10
+    save_freq: int                  = 100
 
 
 class PPOTrainer:
@@ -76,21 +76,23 @@ class PPOTrainer:
             batch_size=config.gen_batch_size,
             prompt_token_len=config.prompt_token_len,
             shuffle=True,
-            num_workers=4
+            num_workers=4,
+            split="train[:32]"
         )
 
     def generate_responses(self):
         """
         Generates rollouts based on prompts using current policy
         Returns: (generated_ids, generated_attn_masks, gen_texts_list)
-        generated_ids: Generated token ids (num_prompts, T_total)
-        generated_attn_masks: Generated attention masks, (num_prompts, T_total) 
-        gen_texts_list: list of generated texts (num_prompts,)
+            generated_ids: Generated token ids (num_prompts, T_total)
+            generated_padding_masks: Generated padding masks, (num_prompts, T_total) 
+            generated_output_mask: Generated output mask, (num_prompts, T_total)  1: generated token, 0: prompt or padding token
+            gen_texts_list: list of generated texts (num_prompts,)
         """
         num_generation_batches = self.config.num_prompts // self.config.gen_batch_size
         assert num_generation_batches * self.config.gen_batch_size == self.config.num_prompts, "num_prompts must be divisible by gen_batch_size"
         
-        gen_ids_list, gen_attn_masks_list, gen_texts_list = [], [], []
+        gen_ids_list, gen_padding_masks_list, gen_output_mask_list, gen_texts_list = [], [], [], []
         for i in range(num_generation_batches):
             input_ids, input_attn_mask = next(iter(self.prompt_dataloader))
             # Generate rollouts with "current" policy
@@ -98,27 +100,33 @@ class PPOTrainer:
                 # autoregressive generation
                 generation_ids = self.ppo_model.actor.generate(             # (B, T) = (B, T_prompt + T_new)
                     input_ids.to(DEVICE),                                   # (B, T_prompt)
-                    attention_mask=input_attn_mask.to(DEVICE),
+                    attention_mask=input_attn_mask.to(DEVICE),              # can be left padded during generation
                     do_sample=True, 
                     max_new_tokens=self.config.max_new_tokens)
                 generated_texts = self.text_tokenizer.batch_decode(
                     generation_ids, skip_special_tokens=True
                 )
-                # mask padding tokens - Left and Right padding
-                gen_attn_mask = generation_ids != self.text_tokenizer.pad_token_id      # (B, T)
+                # mask padding tokens - Left and Right padding - 1: non-padding token, 0: padding token
+                gen_padding_mask = (generation_ids != self.text_tokenizer.pad_token_id).long()        # (B, T)
+                # Output tokens mask - 1: generated token, 0: prompt or padding token
+                gen_output_mask = gen_padding_mask.clone()            # right padding
+                gen_output_mask[:, :input_ids.shape[1]-1] = 0         # (left padding + prompt tokens) are masked except last token where first token is generated
 
                 gen_ids_list.append(generation_ids)
-                gen_attn_masks_list.append(gen_attn_mask)
+                gen_padding_masks_list.append(gen_padding_mask)
+                gen_output_mask_list.append(gen_output_mask)
                 gen_texts_list.extend(generated_texts)
 
-        generated_ids = torch.cat(gen_ids_list, dim=0)                      # (num_prompts, T)
-        generated_attn_masks = torch.cat(gen_attn_masks_list, dim=0)        # (num_prompts, T)
+        generated_ids = torch.cat(gen_ids_list, dim=0)                            # (num_prompts, T)
+        generated_padding_masks = torch.cat(gen_padding_masks_list, dim=0)        # (num_prompts, T) 
+        generated_output_mask = torch.cat(gen_output_mask_list, dim=0)            # (num_prompts, T) 
         
         assert generated_ids.shape == (self.config.num_prompts, self.config.prompt_token_len + self.config.max_new_tokens)
-        assert generated_attn_masks.shape == generated_ids.shape
+        assert generated_padding_masks.shape == generated_ids.shape
+        assert generated_output_mask.shape == generated_ids.shape
         assert len(gen_texts_list) == self.config.num_prompts
 
-        return generated_ids, generated_attn_masks, gen_texts_list
+        return generated_ids, generated_padding_masks, generated_output_mask, gen_texts_list
 
 
     def get_log_probs_and_values(self, model: PPOModel, generation_ids: torch.Tensor, generation_attn_masks: torch.Tensor):
@@ -131,6 +139,7 @@ class PPOTrainer:
             critic_output:  (B, T)   values for each token in the sequence
         """
         lm_output, critic_output = model(generation_ids, generation_attn_masks)             # (B, T, V), (B, T, 1) or None
+        
         # left shift by 1 for autoregressive generation
         logits = lm_output.logits[:, :-1, :]                                               # (B, T-1, V) 
         labels = generation_ids[:, 1:].unsqueeze(-1)                                       # (B, T-1, 1) 
@@ -138,6 +147,7 @@ class PPOTrainer:
         log_probs = torch.log_softmax(logits, dim=-1)                                      # (B, T-1, V) 
         log_probs = torch.gather(log_probs, dim=-1, index=labels)                          # (B, T-1, 1)
         log_probs = log_probs.squeeze(-1)                                                  # (B, T-1)
+        
         # critic values must align with generated tokens / actions (T-1 tokens)
         # a.) the log_probs are T-1 because of left shifting - last position output is ignored because no label. 
         # b.) we keep T-1 (aligned with actions / token log_probs) and 1 last extra for bootstrapping GAE in case it's not EOS (terminal state)
@@ -150,13 +160,83 @@ class PPOTrainer:
 
         return log_probs, critic_output
 
+    
+    def compute_kl_token_penalty(self, log_probs_actor, log_probs_ref):
+        """
+        log_probs_actor: (B, T-1)
+        log_probs_ref: (B, T-1)
+        Returns
+            kl_token_penalty: (B, T-1)
+            token-level KL divergence for each token in the sequence
+            KL(P || Q) = log(P(x)/Q(x)) = log P(x) - log Q(x)
+        """
+        kl_token_penalty = log_probs_actor - log_probs_ref          # (B, T-1)
+        return kl_token_penalty
 
-    def compute_advantages(self):
-        # TODO- ignore prompt tokens in GAE and loss calculation
-        # TODO - Ignore padding tokens in GAE calculation
-        # TODO - Ignore values for input tokens in GAE calculation
-        # gen_attn_mask[:, :self.config.prompt_token_len] = 0
-        pass
+
+    def compute_gae_advantages(self, sequence_rewards, kl_token_penalty, critic_values, gen_output_mask):
+        """
+        Calculate per-timestep (token) advantage using GAE
+        Input:
+            sequence_rewards: (B,)      reward per sequence
+            kl_token_penalty: (B, T-1)  token level kl-penalty
+            critic_values: (B, T)       per-token critical value +1 last token for bootstrapping
+            gen_output_mask: (B, T)     1: generated token, 0: prompt or padding token
+        Returns:
+            advantages: (B, T-1)        advantages for each token in the sequence expect last token used for bootstrapping (not used in loss)
+        """
+
+        # psuedo code:
+        # ------------------------------------------
+        # adv = [0]s
+        # a_next = 0 if T is terminal else V_T
+        # t from last timestamp T-1 -> 0    
+        #     R = seq_reward if t is terminal or t is last else 0
+        #     r_t = R - beta * kl_penalty
+        #     td_t = (r_t + gamma * V_t+1)) - V_t
+        #     a_t = td_t + gamme * lambda * a_next
+        #     a_next = a_t 
+        # ------------------------------------------
+
+        seq_len = gen_output_mask.shape[1]                                                 # T
+        # Find position of last output token
+        first_output_token_idx = gen_output_mask.flip(dims=[1]).argmax(dim=1)              # (B,)
+        last_output_token_idx = (seq_len-1) - first_output_token_idx                       # (B,)
+        last_output_token_idx = torch.min(
+            last_output_token_idx, 
+            torch.ones_like(last_output_token_idx) * (seq_len - 2)                         # we ignore last buffer token, last output token for GAE is T-2
+        )                                                                                  # (B,)
+
+        # Calculate Rewards = R_t - beta * KL_t
+        rewards = torch.zeros_like(kl_token_penalty)                # (B, T-1)
+        rewards.scatter_(
+            dim=1,
+            index=last_output_token_idx.unsqueeze(-1),
+            src=sequence_rewards.unsqueeze(-1).to(rewards.dtype),
+        )                                                           # (B, T-1)  set reward only at last output token position
+        rewards -=  self.config.kl_beta * kl_token_penalty          # (B, T-1)  subtract KL penalty for each token
+        rewards *= gen_output_mask[:, :-1]                          # (B, T-1)  zero out rewards for prompt and padding tokens
+
+        # Calculate TD errors
+        td_errors = (rewards + self.config.gae_gamma * critic_values[:, 1:]) - critic_values[:, :-1]  # (B, T-1)
+        td_errors *= gen_output_mask[:, :-1]                        # (B, T-1)  zero out TD errors for prompt and padding tokens
+
+        # Calculate GAE advantages - recursive calculation at each t from T-1 to 0
+        advantages = torch.zeros_like(td_errors)                                                # (B, T-1)
+        a_next = critic_values[:, -1] * gen_output_mask[:, -1]                                  # (B, 1)    use last token value for bootstrapping if not terminal
+        for t in range(seq_len - 2, -1, -1):
+            a_t = td_errors[:, t] + self.config.gae_gamma * self.config.gae_lambda * a_next       # (B, 1) at t
+            a_t = a_t * gen_output_mask[:, t]                                                   # (B, 1)    zero out a_t for prompt and padding tokens
+            a_next = a_t                                                                        # (B, 1)    update a_next for next iteration
+            advantages[:, t] = a_t.squeeze(-1)                                                  # update (B, T-1)  at t
+        
+        # TODO - do we need to normalize advantages? per batch?
+
+        assert advantages.shape == kl_token_penalty.shape                                       # (B, T-1)
+
+        return advantages       # (B, T-1)
+        
+        
 
     def train(self):
         """
@@ -192,10 +272,10 @@ def get_sentiment_rewards(generated_texts: list[str], reward_model, reward_token
                 return_tensors="pt", 
                 padding=True, 
                 truncation=True).to(DEVICE)
-            outputs = reward_model(**encoded).logits            # (B, 3)    Labels: 0 -> Negative; 1 -> Neutral; 2 -> Positive
-            positive_score = outputs[:, 2]                      # (B,)      # TODO - should we return prob or logits?
-            rewards.extend(positive_score.cpu().tolist())
-    return rewards
+            outputs = reward_model(**encoded).logits            # (b, 3)    Labels: 0 -> Negative; 1 -> Neutral; 2 -> Positive
+            positive_score = outputs[:, 2]                      # (b,)      # TODO - should we return prob or logits? 
+            rewards.append(positive_score)
+    return torch.cat(rewards)                                   # (B,)
 
 
 if __name__ == "__main__":
@@ -204,9 +284,16 @@ if __name__ == "__main__":
         reward_model_name="cardiffnlp/twitter-roberta-base-sentiment-latest"
     )
     trainer = PPOTrainer(config)
-    generated_ids, generated_attn_masks, gen_texts_list = trainer.generate_responses()
-    log_prbs, critic_output = trainer.get_log_probs_and_values(trainer.ppo_model, generated_ids, generated_attn_masks)
-    ref_log_prbs, _ = trainer.get_log_probs_and_values(trainer.ref_model, generated_ids, generated_attn_masks)
+    # generate responses
+    generated_ids, gen_padding_masks, gen_output_masks, gen_texts_list = trainer.generate_responses()
+    # get log probs and values
+    log_prbs, critic_output = trainer.get_log_probs_and_values(trainer.ppo_model, generated_ids, gen_padding_masks)
+    ref_log_prbs, _ = trainer.get_log_probs_and_values(trainer.ref_model, generated_ids, gen_padding_masks)
+    # get rewards
     rewards = get_sentiment_rewards(gen_texts_list, trainer.reward_model, trainer.reward_tokenizer, config.reward_batch_size)
+    # compute advantages
+    advantages = trainer.compute_gae_advantages(rewards, log_prbs - ref_log_prbs, critic_output, gen_output_masks)
+    seq_adv = advantages.sum(dim=1)
     for i in range(len(gen_texts_list)):
-        print("Score: ", rewards[i], "Text: ", gen_texts_list[i])
+        print("Score: ", rewards[i].item(), "Seq Adv: ", seq_adv[i].item(), "Text: ", gen_texts_list[i])
+        print("-"*30)
