@@ -117,6 +117,7 @@ class PPOTrainer:
                 gen_output_mask_list.append(gen_output_mask)
                 gen_texts_list.extend(generated_texts)
 
+        # BUG - gen_ids can be of different len if all seq EOS early.
         generated_ids = torch.cat(gen_ids_list, dim=0)                            # (num_prompts, T)
         generated_padding_masks = torch.cat(gen_padding_masks_list, dim=0)        # (num_prompts, T) 
         generated_output_mask = torch.cat(gen_output_mask_list, dim=0)            # (num_prompts, T) 
@@ -144,6 +145,7 @@ class PPOTrainer:
         logits = lm_output.logits[:, :-1, :]                                               # (B, T-1, V) 
         labels = generation_ids[:, 1:].unsqueeze(-1)                                       # (B, T-1, 1) 
         # calculate log-prob
+        # TODO - log_softmax over entire vocab is expensive. 
         log_probs = torch.log_softmax(logits, dim=-1)                                      # (B, T-1, V) 
         log_probs = torch.gather(log_probs, dim=-1, index=labels)                          # (B, T-1, 1)
         log_probs = log_probs.squeeze(-1)                                                  # (B, T-1)
@@ -214,18 +216,24 @@ class PPOTrainer:
             index=last_output_token_idx.unsqueeze(-1),
             src=sequence_rewards.unsqueeze(-1).to(rewards.dtype),
         )                                                           # (B, T-1)  set reward only at last output token position
-        rewards -=  self.config.kl_beta * kl_token_penalty          # (B, T-1)  subtract KL penalty for each token
+        kl_penalty = kl_token_penalty * gen_output_mask[:, :-1]     # (B, T-1)  zero out kl penalty for prompt and padding tokens
+        rewards -=  self.config.kl_beta * kl_penalty                # (B, T-1)  subtract KL penalty for each token
         rewards *= gen_output_mask[:, :-1]                          # (B, T-1)  zero out rewards for prompt and padding tokens
 
         # Calculate TD errors
-        td_errors = (rewards + self.config.gae_gamma * critic_values[:, 1:]) - critic_values[:, :-1]  # (B, T-1)
+        masked_values = critic_values * gen_output_mask                            # (B, T)    zero out critic values for terminal states
+        td_errors = ((
+            rewards                                                 # reward at t
+            + self.config.gae_gamma * masked_values[:, 1:])         # future value (right shifted)
+            - masked_values[:, :-1])                                # expected value
         td_errors *= gen_output_mask[:, :-1]                        # (B, T-1)  zero out TD errors for prompt and padding tokens
 
         # Calculate GAE advantages - recursive calculation at each t from T-1 to 0
         advantages = torch.zeros_like(td_errors)                                                # (B, T-1)
-        a_next = critic_values[:, -1] * gen_output_mask[:, -1]                                  # (B, 1)    use last token value for bootstrapping if not terminal
+        # IMP - init a_next after last output token as 0
+        a_next = torch.zeros(critic_values.shape[0], device=DEVICE)                             # (B, 1)    use last token value for bootstrapping if not terminal
         for t in range(seq_len - 2, -1, -1):
-            a_t = td_errors[:, t] + self.config.gae_gamma * self.config.gae_lambda * a_next       # (B, 1) at t
+            a_t = td_errors[:, t] + self.config.gae_gamma * self.config.gae_lambda * a_next     # (B, 1) at t
             a_t = a_t * gen_output_mask[:, t]                                                   # (B, 1)    zero out a_t for prompt and padding tokens
             a_next = a_t                                                                        # (B, 1)    update a_next for next iteration
             advantages[:, t] = a_t.squeeze(-1)                                                  # update (B, T-1)  at t
@@ -273,7 +281,9 @@ def get_sentiment_rewards(generated_texts: list[str], reward_model, reward_token
                 padding=True, 
                 truncation=True).to(DEVICE)
             outputs = reward_model(**encoded).logits            # (b, 3)    Labels: 0 -> Negative; 1 -> Neutral; 2 -> Positive
-            positive_score = outputs[:, 2]                      # (b,)      # TODO - should we return prob or logits? 
+            # Convert to probabilities to bound the reward signal strictly between [0, 1]
+            probs = torch.softmax(outputs, dim=-1)              # (b, 3)
+            positive_score = probs[:, 2]                        # (b,)
             rewards.append(positive_score)
     return torch.cat(rewards)                                   # (B,)
 
