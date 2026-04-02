@@ -242,77 +242,87 @@ class PPOTrainer:
             a_t = a_t * gen_output_mask[:, t]                                                   # (B, 1)    zero out a_t for prompt and padding tokens
             a_next = a_t                                                                        # (B, 1)    update a_next for next iteration
             advantages[:, t] = a_t.squeeze(-1)                                                  # update (B, T-1)  at t
-        
-        # TODO - do we need to normalize advantages? per batch?
 
         assert advantages.shape == kl_token_penalty.shape                                       # (B, T-1)
-
-        return advantages       # (B, T-1)
+        return advantages                                                                       # (B, T-1)
         
         
 
     def train(self):
         """
-        3. Run PPO training loop for N ppo_steps
-            a. Generate responses from actor from dataset prompts           --> TODO: how many rollouts responses per prompt?
-            b. Compute sequence-level rewards using static reward model
-            for batch_size in generate_responses():
-                for micro_step in range(num_micro_steps):                   --> TODO: should we run multiple steps over same mini-batch? or just 1?
-                    c. Calculate timestep (token-level) KL divergence between actor and ref
-                    d. Compute log-prob from PPO LM model (actor, critic, ref_model)
-                    e. Compute advantage estimates (GAE) at token-level using reward, KL, value
-                    f. Compute PPO loss = PPO clipped loss + beta * KL divergence penalty 
-                    g. Update actor and critic: Loss = PPO loss + value loss (MSE)
+        PPO training loop -- generate rollouts, and update Actor and Critic models using PPO loss
         """
+
+        # Psuedo code:
+        # Run PPO training loop for N ppo_steps
+        #     1. Generate responses from actor from dataset prompts           --> TODO: how many rollouts responses per prompt?
+        #     2. Compute sequence-level rewards using static reward model
+        #     3. for num of learning epochs:
+        #         for batch in generated data:
+        #             a. Old (ie. current) & Ref policy - log-prob and value on generations.                   
+        #             b. Current policy log-prob and values from PPO model (actor, critic)
+        #             c. Calculate timestep (token-level) KL divergence between actor and ref
+        #             d. Compute advantage estimates (GAE) at token-level using reward, KL, value
+        #             e. Compute PPO loss = PPO clipped loss + Value Loss (MSE) 
+        #             f. Backprop
         print("Starting PPO training...")
 
         # Initialize optimizer - actor and critic parameters
         optimizer = torch.optim.Adam(self.ppo_model.parameters(), lr=self.config.lr)
+        optimizer.zero_grad()
         
+        # Rollout generation loop
         for ppo_epoch in range(self.config.ppo_epochs):
-            # 1. Generate responses from actor from dataset prompts
+            # 1. Generate responses using current actor from dataset prompts
             generated_ids, gen_padding_masks, gen_output_masks, gen_texts_list = self.generate_responses()    # (num_prompts, T), (num_prompts, T), (num_prompts, T), (num_prompts,)
-            # 2. Compute sequence-level rewards using static reward model
+            # 2. Get rewards using static reward model for generated sequences
             rewards = get_sentiment_rewards(gen_texts_list, self.reward_model, self.reward_tokenizer, self.config.reward_batch_size)    # (num_prompts,)
-            # 3. Calculate old, ref log-prob, outside update loop
-            with torch.no_grad():
-                old_log_probs, old_critic_values = self.get_log_probs_and_values(        # (num_prompts, T-1), (num_prompts, T)
-                    self.ppo_model,
-                    generated_ids,
-                    gen_padding_masks
-                )
-                ref_log_probs, _ = self.get_log_probs_and_values(                       # (num_prompts, T-1)
-                    self.ref_model,
-                    generated_ids,
-                    gen_padding_masks
-                )
             
-            # 4. Policy Learning loop
-            for learning_epoch in range(self.config.learning_epochs):
-                for batch_idx in range(0, len(generated_ids), self.config.batch_size):
+            # to store Old and Ref policy log-prob and value outputs as they remain the same across epochs
+            cache = {}
+            
+            # 3. Policy Learning loop
+            for learning_epoch in range(self.config.learning_epochs):                   # epochs over same batch of rollouts
 
+                num_steps = len(generated_ids) // self.config.batch_size
+                for i in range(num_steps):
+                    
+                    batch_idx = i * self.config.batch_size
                     # Get batch of generated ids, padding masks, output masks
                     batch_generated_ids = generated_ids[batch_idx:batch_idx+self.config.batch_size]                 # (B, T)
                     batch_gen_padding_masks = gen_padding_masks[batch_idx:batch_idx+self.config.batch_size]         # (B, T)
                     batch_gen_output_masks = gen_output_masks[batch_idx:batch_idx+self.config.batch_size]           # (B, T)
-                    # batch log-prob and reward
-                    batch_old_log_probs = old_log_probs[batch_idx:batch_idx+self.config.batch_size]                 # (B, T-1)
-                    batch_ref_log_probs = ref_log_probs[batch_idx:batch_idx+self.config.batch_size]                 # (B, T-1)
-                    batch_old_critic_values = old_critic_values[batch_idx:batch_idx+self.config.batch_size]         # (B, T)
                     batch_rewards = rewards[batch_idx:batch_idx+self.config.batch_size]                             # (B,)
+
+                    # a. Calculate Old and Ref policy : log-prob and values |  no grad ie. constant data
+                    if i not in cache:
+                        with torch.no_grad():
+                            old_log_probs, old_critic_values = self.get_log_probs_and_values(        # (B, T-1), (B, T)
+                                self.ppo_model,
+                                generated_ids,
+                                gen_padding_masks
+                            )
+                            ref_log_probs, _ = self.get_log_probs_and_values(                       # (B, T-1)
+                                self.ref_model,
+                                generated_ids,
+                                gen_padding_masks
+                            )
+                            cache[i] = (old_log_probs, old_critic_values, ref_log_probs)
+                    # NOTE - assumes no shuffle of generated rollouts between epochs
+                    old_log_probs, old_critic_values, ref_log_probs = cache[i]                  
                     
-                    # a. Calculate current policy log-probs, critic values
+                    # b. Calculate current policy log-probs, critic values
                     current_log_probs, current_critic_values = self.get_log_probs_and_values(       # (B, T-1), (B, T)
                         self.ppo_model,
                         batch_generated_ids,                                                        # (B, T)
                         batch_gen_padding_masks                                                     # (B, T)
                     )
-                    # b. Calculate KL token penalty
+                    # c. Calculate KL token penalty
                     kl_token_penalty = self.compute_kl_token_penalty(                               # (B, T-1)
                         current_log_probs,                                                          # (B, T-1)
-                        batch_ref_log_probs                                                         # (B, T-1)
+                        ref_log_probs                                                               # (B, T-1)
                     )
-                    # c. Compute advantage estimates (GAE) at token-level using reward, KL, value
+                    # d. Compute advantage estimates (GAE) at token-level using reward, KL, value
                     advantages = self.compute_gae_advantages(                                       # (B, T-1)
                         batch_rewards,                                                              # (B,)
                         kl_token_penalty,                                                           # (B, T-1)
@@ -321,34 +331,41 @@ class PPOTrainer:
                     )
                     norm_adv = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-                    # d. Actor - clipped loss
-                    prob_ratio = torch.exp(current_log_probs - batch_old_log_probs)                 # (B, T-1)
-                    prob_ratio_clipped = torch.clip(                                               # (B, T-1)
+                    # -----------------------------------------------------------------------------
+                    # e. PPO loss
+                    # Actor loss
+                    prob_ratio = torch.exp(current_log_probs - old_log_probs)                       # (B, T-1)
+                    prob_ratio_clipped = torch.clip(                                                # (B, T-1)
                         prob_ratio, 1 - self.config.clip_epsilon, 1 + self.config.clip_epsilon
                     )
-                    # TODO - log how many times prob_ratio is getting clipped
+                    # TODO - log how frequently prob_ratio is getting clipped, 
+                    # TODO how frequently loss_actor is clipped ie. zero grad
                     unclipped = prob_ratio *  norm_adv                                              # (B, T-1)
                     clipped = prob_ratio_clipped * norm_adv
-                    loss_actor = - torch.min(unclipped, clipped).mean()                             # scalar
+                    loss_actor = - torch.min(unclipped, clipped)                                    # (B, T-1)
+                    loss_actor = loss_actor * batch_gen_output_masks[:, :-1]                        # (B, T-1) zero out padding + prompt tokens loss
+                    loss_actor = loss_actor.mean()                                                  # scalar
 
-                    # e. Critic loss
-                    value_target = advantages + batch_old_critic_values[:, :-1]                     # (B, T-1)  zero out last token for bootstrapping
-                    value_current = current_critic_values[:, :-1]                                   # (B, T-1)  zero out last token for bootstrapping
-                    loss_critic = torch.square(value_target - value_current).mean()                  # MSE loss scalar    
+                    # Critic loss
+                    value_target = advantages + old_critic_values[:, :-1]                           # (B, T-1)  ignore last token used for bootstrapping
+                    value_current = current_critic_values[:, :-1]                                   # (B, T-1)  ignore last token used for bootstrapping
+                    loss_critic = torch.square(value_target - value_current)                        # (B, T-1)
+                    loss_critic = loss_critic * batch_gen_output_masks[:, :-1]                      # (B, T-1)  zero out padding + prompt tokens loss
+                    loss_critic = loss_critic.mean()                                                # MSE loss scalar
 
-                    # f. PPO loss
-                    loss_ppo = loss_actor + self.config.value_loss_coef * loss_critic              # scalar
+                    # PPO loss
+                    loss_ppo = loss_actor + self.config.value_loss_coef * loss_critic               # scalar
                     print("Loss: ", loss_ppo)
+                    # -----------------------------------------------------------------------------
 
-                    # g. Optimizer step
-                    loss_ppo.backward()                                                             # gradient computation
-                    torch.nn.utils.clip_grad_norm_(
-                        self.ppo_model.parameters(), 
-                        max_norm=self.config.max_grad_norm
-                    )    # gradient clipping
-                    optimizer.step()
-                    # TODO grad accumulation
-                    optimizer.zero_grad()
+                    # f. Optimizer step
+                    loss_scaled = loss_ppo / self.config.grad_accumulation_steps
+                    loss_scaled.backward()                                                             # gradient accumulation
+
+                    if (i+1) % self.config.grad_accumulation_steps == 0:
+                        torch.nn.utils.clip_grad_norm_(self.ppo_model.parameters(), max_norm=self.config.max_grad_norm)
+                        optimizer.step()
+                        optimizer.zero_grad()
 
 
                 # end of learning epoch
