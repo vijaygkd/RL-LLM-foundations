@@ -237,7 +237,7 @@ class PPOTrainer:
         advantages = torch.zeros_like(td_errors)                                                # (B, T-1)
         # IMP - init a_next after last output token as 0
         a_next = torch.zeros(critic_values.shape[0], device=DEVICE)                             # (B, 1)    use last token value for bootstrapping if not terminal
-        for t in range(seq_len - 2, -1, -1):
+        for t in range(seq_len - 2, -1, -1):                                # TODO  IMP ----> is there way to prevent the for loop and use a vectorized approach to speed up computation???
             a_t = td_errors[:, t] + self.config.gae_gamma * self.config.gae_lambda * a_next     # (B, 1) at t
             a_t = a_t * gen_output_mask[:, t]                                                   # (B, 1)    zero out a_t for prompt and padding tokens
             a_next = a_t                                                                        # (B, 1)    update a_next for next iteration
@@ -279,7 +279,7 @@ class PPOTrainer:
             rewards = get_sentiment_rewards(gen_texts_list, self.reward_model, self.reward_tokenizer, self.config.reward_batch_size)    # (num_prompts,)
             
             # to store Old and Ref policy log-prob and value outputs as they remain the same across epochs
-            cache = {}
+            cache = {}  # --> TODO is there better way to handle this???
             
             # 3. Policy Learning loop
             for learning_epoch in range(self.config.learning_epochs):                   # epochs over same batch of rollouts
@@ -299,13 +299,13 @@ class PPOTrainer:
                         with torch.no_grad():
                             old_log_probs, old_critic_values = self.get_log_probs_and_values(        # (B, T-1), (B, T)
                                 self.ppo_model,
-                                generated_ids,
-                                gen_padding_masks
+                                batch_generated_ids,
+                                batch_gen_padding_masks
                             )
                             ref_log_probs, _ = self.get_log_probs_and_values(                       # (B, T-1)
                                 self.ref_model,
-                                generated_ids,
-                                gen_padding_masks
+                                batch_generated_ids,
+                                batch_gen_padding_masks
                             )
                             cache[i] = (old_log_probs, old_critic_values, ref_log_probs)
                     # NOTE - assumes no shuffle of generated rollouts between epochs
@@ -369,9 +369,9 @@ class PPOTrainer:
 
 
                 # end of learning epoch
-                print(f"PPO epoch {ppo_epoch} learning epoch {learning_epoch}/{self.config.learning_epochs} completed")
+                print(f"PPO epoch {ppo_epoch+1} learning epoch {learning_epoch+1}/{self.config.learning_epochs} completed")
             # end of output epoch
-            print(f"PPO epoch {ppo_epoch}/{self.config.ppo_epochs} completed")
+            print(f"PPO epoch {ppo_epoch+1}/{self.config.ppo_epochs} completed")
         
         # end of train
         print("-"*50)
