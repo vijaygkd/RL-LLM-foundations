@@ -290,6 +290,7 @@ class PPOTrainer:
             # 4. Policy Learning loop
             for learning_epoch in range(self.config.learning_epochs):
                 for batch_idx in range(0, len(generated_ids), self.config.batch_size):
+
                     # Get batch of generated ids, padding masks, output masks
                     batch_generated_ids = generated_ids[batch_idx:batch_idx+self.config.batch_size]                 # (B, T)
                     batch_gen_padding_masks = gen_padding_masks[batch_idx:batch_idx+self.config.batch_size]         # (B, T)
@@ -340,14 +341,15 @@ class PPOTrainer:
                     print("Loss: ", loss_ppo)
 
                     # g. Optimizer step
-                    # TODO - add gradient accumulation
-                    optimizer.zero_grad()
-                    loss_ppo.backward()                                                         # gradient computation
+                    loss_ppo.backward()                                                             # gradient computation
                     torch.nn.utils.clip_grad_norm_(
                         self.ppo_model.parameters(), 
                         max_norm=self.config.max_grad_norm
                     )    # gradient clipping
-                    optimizer.step()                                                                                  # optimizer step
+                    optimizer.step()
+                    # TODO grad accumulation
+                    optimizer.zero_grad()
+
 
                 # end of learning epoch
                 print(f"PPO epoch {ppo_epoch} learning epoch {learning_epoch}/{self.config.learning_epochs} completed")
