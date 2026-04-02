@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import torch
+import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification
 
 from ppo_model import PPOModel
@@ -143,12 +144,14 @@ class PPOTrainer:
         
         # left shift by 1 for autoregressive generation
         logits = lm_output.logits[:, :-1, :]                                               # (B, T-1, V) 
-        labels = generation_ids[:, 1:].unsqueeze(-1)                                       # (B, T-1, 1) 
-        # calculate log-prob
-        # TODO - log_softmax over entire vocab is expensive. 
-        log_probs = torch.log_softmax(logits, dim=-1)                                      # (B, T-1, V) 
-        log_probs = torch.gather(log_probs, dim=-1, index=labels)                          # (B, T-1, 1)
-        log_probs = log_probs.squeeze(-1)                                                  # (B, T-1)
+        labels = generation_ids[:, 1:]                                                    # (B, T-1) 
+        # calculate log-prob for labels
+        # TIP: use F.cross_entropy with reduction="none" and multiply by -1 to get log_probs to save memory
+        # see note softmax_optimization_note.md
+        # F.cross_entropy expects classes/vocab to be in the second dimension: (B, V, T-1)
+        logits_transposed = logits.transpose(1, 2)
+        # Compute fused -log(P(target))
+        log_probs = -F.cross_entropy(logits_transposed, labels, reduction="none") # -> Output: (B, T-1)
         
         # critic values must align with generated tokens / actions (T-1 tokens)
         # a.) the log_probs are T-1 because of left shifting - last position output is ignored because no label. 
