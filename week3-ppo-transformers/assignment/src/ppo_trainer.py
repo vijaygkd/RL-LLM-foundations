@@ -25,18 +25,20 @@ class TrainingConfig:
     prompt_token_len: int           = 8
     max_new_tokens: int             = 24            # T_total = T_prompt + T_new = 8 + 24 = 32
     # training
-    ppo_steps: int                  = 1000
-    micro_steps: int                = 4             # number of gradient updates per PPO step --> not needed maybe
-    micro_batch_size: int           = 4
-    grad_accumulation_steps: int    = 4             # effective batch size = micro_batch_size * gradient_accumulation_steps = 16
+    ppo_epochs: int                 = 1
+    learning_epochs: int            = 4             # number of learning epoch per set of rollouts --> InstructGPT paper uses 4
+    batch_size: int                 = 4             # learning loop batch size
+    grad_accumulation_steps: int    = 4             # effective batch size = batch_size * gradient_accumulation_steps = 16
     # hyper-parameters
     clip_epsilon: float             = 0.2
     kl_beta: float                  = 0.01
     gae_gamma: float                = 0.99
     gae_lambda: float               = 0.95
-    value_loss_coef: float          = 0.1
+    value_loss_coef: float          = 1
+    entropy_coef: float             = 0.2
     # optimizers
     lr: float                       = 1e-6
+    max_grad_norm: float            = 1.0
     # logging
     log_freq: int                   = 10
     save_freq: int                  = 100
@@ -55,21 +57,21 @@ class PPOTrainer:
         self.text_tokenizer = AutoTokenizer.from_pretrained(config.model_name)
         print("Tokenizer pad token id: ", self.text_tokenizer.pad_token_id)
         print("Tokenizer eos token id: ", self.text_tokenizer.eos_token_id)
-        # PPO models setup
         # -------------------------------------
+        # PPO models setup
         print("Loading PPO model... ", config.model_name)
         self.ppo_model = PPOModel(config.model_name, add_value_head=True).to(DEVICE)                                # actor + critic    
         print("Loading reference model... ", config.model_name)
         self.ref_model = PPOModel(config.model_name, add_value_head=False).to(DEVICE).requires_grad_(False)         # reference model (frozen)
-        # reward model setup
         # -------------------------------------
+        # reward model setup
         print("Loading reward model... ", config.reward_model_name)
         self.reward_tokenizer = AutoTokenizer.from_pretrained(config.reward_model_name)
         # TODO - can this load the reward model trained in week 2?
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(
             config.reward_model_name).to(DEVICE).requires_grad_(False)
-        # dataset setup
         # -------------------------------------
+        # Dataset
         print("Loading dataset... ", config.dataset_name)
         self.prompt_dataloader = build_prompt_dataloader(
             tokenizer=self.text_tokenizer,
@@ -138,9 +140,9 @@ class PPOTrainer:
         generation_attn_masks: (B, T)   padding mask
         return 
             log_probs:      (B, T-1) left-shifted by 1
-            critic_output:  (B, T)   values for each token in the sequence
+            critic_values:  (B, T)   values for each token in the sequence
         """
-        lm_output, critic_output = model(generation_ids, generation_attn_masks)             # (B, T, V), (B, T, 1) or None
+        lm_output, critic_values = model(generation_ids, generation_attn_masks)             # (B, T, V), (B, T, 1) or None
         
         # left shift by 1 for autoregressive generation
         logits = lm_output.logits[:, :-1, :]                                               # (B, T-1, V) 
@@ -156,14 +158,14 @@ class PPOTrainer:
         # critic values must align with generated tokens / actions (T-1 tokens)
         # a.) the log_probs are T-1 because of left shifting - last position output is ignored because no label. 
         # b.) we keep T-1 (aligned with actions / token log_probs) and 1 last extra for bootstrapping GAE in case it's not EOS (terminal state)
-        if critic_output is not None:
-            critic_output = critic_output.squeeze(-1)                                      # (B, T)
+        if critic_values is not None:
+            critic_values = critic_values.squeeze(-1)                                      # (B, T)
 
         assert log_probs.shape == (generation_ids.shape[0], generation_ids.shape[1] - 1)
-        if critic_output is not None:
-            assert critic_output.shape == (generation_ids.shape[0], generation_ids.shape[1])
+        if critic_values is not None:
+            assert critic_values.shape == (generation_ids.shape[0], generation_ids.shape[1])
 
-        return log_probs, critic_output
+        return log_probs, critic_values
 
     
     def compute_kl_token_penalty(self, log_probs_actor, log_probs_ref):
@@ -262,7 +264,104 @@ class PPOTrainer:
                     f. Compute PPO loss = PPO clipped loss + beta * KL divergence penalty 
                     g. Update actor and critic: Loss = PPO loss + value loss (MSE)
         """
-        pass
+        print("Starting PPO training...")
+
+        # Initialize optimizer - actor and critic parameters
+        optimizer = torch.optim.Adam(self.ppo_model.parameters(), lr=self.config.lr)
+        
+        for ppo_epoch in range(self.config.ppo_epochs):
+            # 1. Generate responses from actor from dataset prompts
+            generated_ids, gen_padding_masks, gen_output_masks, gen_texts_list = self.generate_responses()    # (num_prompts, T), (num_prompts, T), (num_prompts, T), (num_prompts,)
+            # 2. Compute sequence-level rewards using static reward model
+            rewards = get_sentiment_rewards(gen_texts_list, self.reward_model, self.reward_tokenizer, self.config.reward_batch_size)    # (num_prompts,)
+            # 3. Calculate old, ref log-prob, outside update loop
+            with torch.no_grad():
+                old_log_probs, old_critic_values = self.get_log_probs_and_values(        # (num_prompts, T-1), (num_prompts, T)
+                    self.ppo_model,
+                    generated_ids,
+                    gen_padding_masks
+                )
+                ref_log_probs, _ = self.get_log_probs_and_values(                       # (num_prompts, T-1)
+                    self.ref_model,
+                    generated_ids,
+                    gen_padding_masks
+                )
+            
+            # 4. Policy Learning loop
+            for learning_epoch in range(self.config.learning_epochs):
+                for batch_idx in range(0, len(generated_ids), self.config.batch_size):
+                    # Get batch of generated ids, padding masks, output masks
+                    batch_generated_ids = generated_ids[batch_idx:batch_idx+self.config.batch_size]                 # (B, T)
+                    batch_gen_padding_masks = gen_padding_masks[batch_idx:batch_idx+self.config.batch_size]         # (B, T)
+                    batch_gen_output_masks = gen_output_masks[batch_idx:batch_idx+self.config.batch_size]           # (B, T)
+                    # batch log-prob and reward
+                    batch_old_log_probs = old_log_probs[batch_idx:batch_idx+self.config.batch_size]                 # (B, T-1)
+                    batch_ref_log_probs = ref_log_probs[batch_idx:batch_idx+self.config.batch_size]                 # (B, T-1)
+                    batch_old_critic_values = old_critic_values[batch_idx:batch_idx+self.config.batch_size]         # (B, T)
+                    batch_rewards = rewards[batch_idx:batch_idx+self.config.batch_size]                             # (B,)
+                    
+                    # a. Calculate current policy log-probs, critic values
+                    current_log_probs, current_critic_values = self.get_log_probs_and_values(       # (B, T-1), (B, T)
+                        self.ppo_model,
+                        batch_generated_ids,                                                        # (B, T)
+                        batch_gen_padding_masks                                                     # (B, T)
+                    )
+                    # b. Calculate KL token penalty
+                    kl_token_penalty = self.compute_kl_token_penalty(                               # (B, T-1)
+                        current_log_probs,                                                          # (B, T-1)
+                        batch_ref_log_probs                                                         # (B, T-1)
+                    )
+                    # c. Compute advantage estimates (GAE) at token-level using reward, KL, value
+                    advantages = self.compute_gae_advantages(                                       # (B, T-1)
+                        batch_rewards,                                                              # (B,)
+                        kl_token_penalty,                                                           # (B, T-1)
+                        current_critic_values,                                                      # (B, T)
+                        batch_gen_output_masks                                                      # (B, T)
+                    )
+                    norm_adv = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+                    # d. Actor - clipped loss
+                    prob_ratio = torch.exp(current_log_probs - batch_old_log_probs)                 # (B, T-1)
+                    prob_ratio_clipped = torch.clip(                                               # (B, T-1)
+                        prob_ratio, 1 - self.config.clip_epsilon, 1 + self.config.clip_epsilon
+                    )
+                    # TODO - log how many times prob_ratio is getting clipped
+                    unclipped = prob_ratio *  norm_adv                                              # (B, T-1)
+                    clipped = prob_ratio_clipped * norm_adv
+                    loss_actor = - torch.min(unclipped, clipped).mean()                             # scalar
+
+                    # e. Critic loss
+                    value_target = advantages + batch_old_critic_values[:, :-1]                     # (B, T-1)  zero out last token for bootstrapping
+                    value_current = current_critic_values[:, :-1]                                   # (B, T-1)  zero out last token for bootstrapping
+                    loss_critic = torch.square(value_target - value_current).mean()                  # MSE loss scalar    
+
+                    # f. PPO loss
+                    loss_ppo = loss_actor + self.config.value_loss_coef * loss_critic              # scalar
+                    print("Loss: ", loss_ppo)
+
+                    # g. Optimizer step
+                    # TODO - add gradient accumulation
+                    optimizer.zero_grad()
+                    loss_ppo.backward()                                                         # gradient computation
+                    torch.nn.utils.clip_grad_norm_(
+                        self.ppo_model.parameters(), 
+                        max_norm=self.config.max_grad_norm
+                    )    # gradient clipping
+                    optimizer.step()                                                                                  # optimizer step
+
+                # end of learning epoch
+                print(f"PPO epoch {ppo_epoch} learning epoch {learning_epoch}/{self.config.learning_epochs} completed")
+            # end of output epoch
+            print(f"PPO epoch {ppo_epoch}/{self.config.ppo_epochs} completed")
+        
+        # end of train
+        print("-"*50)
+        print(f"PPO training completed")
+        
+
+
+
+
 
 ########################################
 # Reward functions
@@ -297,16 +396,21 @@ if __name__ == "__main__":
         reward_model_name="cardiffnlp/twitter-roberta-base-sentiment-latest"
     )
     trainer = PPOTrainer(config)
-    # generate responses
-    generated_ids, gen_padding_masks, gen_output_masks, gen_texts_list = trainer.generate_responses()
-    # get log probs and values
-    log_prbs, critic_output = trainer.get_log_probs_and_values(trainer.ppo_model, generated_ids, gen_padding_masks)
-    ref_log_prbs, _ = trainer.get_log_probs_and_values(trainer.ref_model, generated_ids, gen_padding_masks)
-    # get rewards
-    rewards = get_sentiment_rewards(gen_texts_list, trainer.reward_model, trainer.reward_tokenizer, config.reward_batch_size)
-    # compute advantages
-    advantages = trainer.compute_gae_advantages(rewards, log_prbs - ref_log_prbs, critic_output, gen_output_masks)
-    seq_adv = advantages.sum(dim=1)
-    for i in range(len(gen_texts_list)):
-        print("Score: ", rewards[i].item(), "Seq Adv: ", seq_adv[i].item(), "Text: ", gen_texts_list[i])
-        print("-"*30)
+    # train the model
+    trainer.train()
+
+
+
+    # # generate responses
+    # generated_ids, gen_padding_masks, gen_output_masks, gen_texts_list = trainer.generate_responses()
+    # # get log probs and values
+    # log_prbs, critic_output = trainer.get_log_probs_and_values(trainer.ppo_model, generated_ids, gen_padding_masks)
+    # ref_log_prbs, _ = trainer.get_log_probs_and_values(trainer.ref_model, generated_ids, gen_padding_masks)
+    # # get rewards
+    # rewards = get_sentiment_rewards(gen_texts_list, trainer.reward_model, trainer.reward_tokenizer, config.reward_batch_size)
+    # # compute advantages
+    # advantages = trainer.compute_gae_advantages(rewards, log_prbs - ref_log_prbs, critic_output, gen_output_masks)
+    # seq_adv = advantages.sum(dim=1)
+    # for i in range(len(gen_texts_list)):
+    #     print("Score: ", rewards[i].item(), "Seq Adv: ", seq_adv[i].item(), "Text: ", gen_texts_list[i])
+    #     print("-"*30)
