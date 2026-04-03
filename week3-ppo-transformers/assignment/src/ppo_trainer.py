@@ -92,10 +92,9 @@ class PPOTrainer:
             num_workers=4,
             split="test[:128]"  # Holdout set for periodic evaluation
         )
-        self.logger = PPOTelemetry(config=self.config)
-        
-        print("Compiling PPO model for acceleration...")
-        self.ppo_model = torch.compile(self.ppo_model)
+        if torch.cuda.is_available():
+            print("Compiling PPO model for acceleration...")
+            self.ppo_model = torch.compile(self.ppo_model)
 
 
     @torch.no_grad()
