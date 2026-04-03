@@ -18,7 +18,7 @@ class TrainingConfig:
     # dataset
     dataset_name: str               = "stanfordnlp/imdb"
     num_prompts: int                = 512             # rollout dataset size
-    gen_batch_size: int             = 64               
+    gen_batch_size: int             = 32               
     reward_batch_size: int          = 64
     prompt_token_len: int           = 8
     max_new_tokens: int             = 24            # T_total = T_prompt + T_new = 8 + 24 = 32
@@ -28,7 +28,6 @@ class TrainingConfig:
     batch_size: int                 = 16             # learning loop batch size
     grad_accumulation_steps: int    = 4             # effective batch size = batch_size * gradient_accumulation_steps = 64
     eval_interval: int              = 10            # run evaluation every N epochs
-    checkpoint_dir: str             = "checkpoints/ppo_final_actor"
     # hyper-parameters
     clip_epsilon: float             = 0.2
     kl_beta: float                  = 0.01
@@ -41,6 +40,7 @@ class TrainingConfig:
     # logging
     log_freq: int                   = 10
     save_freq: int                  = 100
+    checkpoint_dir: str             = "checkpoints/ppo_final_actor"
 
 
 class PPOTrainer:
@@ -93,6 +93,8 @@ class PPOTrainer:
         )
         self.logger = PPOTelemetry(config=self.config)
 
+
+    @torch.no_grad()
     def generate_responses(self):
         """
         Generates rollouts based on prompts using current policy
@@ -150,6 +152,7 @@ class PPOTrainer:
 
         return generated_ids, generated_padding_masks, generated_output_mask, gen_texts_list
 
+
     @torch.no_grad()
     def evaluate(self):
         """Run standard generation on the unseen eval dataset and compute the mean reward."""
@@ -187,7 +190,7 @@ class PPOTrainer:
         self.ppo_model.train()
         return sum(eval_rewards) / len(eval_rewards) if eval_rewards else 0.0, sample_texts, sample_rewards
 
-    @torch.no_grad()
+
     def get_log_probs_and_values(self, model: PPOModel, generation_ids: torch.Tensor, generation_attn_masks: torch.Tensor):
         """
         Compute log probs and values for generated tokens
@@ -223,6 +226,7 @@ class PPOTrainer:
         return log_probs, critic_values
 
     
+    @torch.no_grad()
     def compute_kl_token_penalty(self, log_probs_actor, log_probs_ref):
         """
         log_probs_actor: (B, T-1)
@@ -236,6 +240,7 @@ class PPOTrainer:
         return kl_token_penalty
 
 
+    @torch.no_grad()
     def compute_gae_advantages(self, sequence_rewards, kl_token_penalty, critic_values, gen_output_mask):
         """
         Calculate per-timestep (token) advantage using GAE
@@ -302,13 +307,11 @@ class PPOTrainer:
         assert advantages.shape == kl_token_penalty.shape                                       # (B, T-1)
         return advantages                                                                       # (B, T-1)
         
-        
 
     def train(self):
         """
         PPO training loop -- generate rollouts, and update Actor and Critic models using PPO loss
         """
-
         # Psuedo code:
         # Run PPO training loop for N ppo_steps
         #     (step 1- 4: No Grad)
@@ -322,8 +325,9 @@ class PPOTrainer:
         #             a. Compute current policy log-prob and values from PPO model (actor, critic)
         #             b. Compute PPO loss = PPO clipped loss + Value Loss (MSE) 
         #             c. Backprop
+
         print("Starting PPO training...")
-        num_update_steps = self.config.ppo_epochs * self.config.learning_epochs * self.config.num_prompts / self.config.batch_size  // (self.config.batch_size * self.config.grad_accumulation_steps)
+        num_update_steps = self.config.ppo_epochs * self.config.learning_epochs * self.config.num_prompts  // (self.config.batch_size * self.config.grad_accumulation_steps)
         print(f"Number of learning steps: {num_update_steps} = Epochs {self.config.ppo_epochs} * Learning Epochs {self.config.learning_epochs} * Prompts {self.config.num_prompts} / (Batch Size {self.config.batch_size} * Gradient Accumulation Steps {self.config.grad_accumulation_steps})")
 
         # Initialize optimizer - actor and critic parameters
@@ -455,7 +459,7 @@ class PPOTrainer:
                     loss_scaled.backward()                                                             # gradient accumulation
 
                     if (i+1) % self.config.grad_accumulation_steps == 0:
-                        print(f"Loss at {i+1}:", loss_scaled.item())
+                        # print(f"Loss at {i+1}:", loss_scaled.item())
                         torch.nn.utils.clip_grad_norm_(self.ppo_model.parameters(), max_norm=self.config.max_grad_norm)
                         optimizer.step()
                         optimizer.zero_grad()
@@ -490,13 +494,12 @@ class PPOTrainer:
 
 
 
-
-
 ########################################
 # Reward functions
 # TODO - move this to a separate file because we might want to use different reward functions.
 # PPOTrainer should be reward-agnostic
 ########################################
+@torch.no_grad()
 def get_sentiment_rewards(generated_texts: list[str], reward_model, reward_tokenizer, reward_batch_size=4):
     """
     Return scalar sentiment reward for each generated text
@@ -522,7 +525,7 @@ def get_sentiment_rewards(generated_texts: list[str], reward_model, reward_token
 if __name__ == "__main__":
 
     debug_config = TrainingConfig(
-        base_model_name="Qwen/Qwen2.5-0.5B",
+        model_name="Qwen/Qwen3-0.6B",
         reward_model_name="cardiffnlp/twitter-roberta-base-sentiment-latest",
         num_prompts=32,            # debug scale
         gen_batch_size=4,          # debug scale
