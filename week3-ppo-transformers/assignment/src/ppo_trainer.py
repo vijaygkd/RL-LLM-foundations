@@ -346,7 +346,7 @@ class PPOTrainer:
         if self.logger.use_wandb:
             import wandb
             wandb.log({"eval_reward": eval_reward}, step=0)
-            self.logger.log_eval_generations(-1, sample_texts, sample_rewards)
+            self.logger.log_eval_generations(0, sample_texts, sample_rewards)
 
         ############################################################### LOOP ###############################################################
         # Rollout generation loop
@@ -485,7 +485,7 @@ class PPOTrainer:
             if (ppo_epoch + 1) % self.config.eval_interval == 0:
                 eval_reward, sample_texts, sample_rewards = self.evaluate()
                 self.logger.log_eval(eval_reward)
-                self.logger.log_eval_generations(ppo_epoch, sample_texts, sample_rewards)
+                self.logger.log_eval_generations(ppo_epoch + 1, sample_texts, sample_rewards)
                 print(f"--> Eval Reward: {eval_reward:.4f}")
 
             # end of output epoch

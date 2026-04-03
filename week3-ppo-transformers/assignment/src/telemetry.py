@@ -55,17 +55,17 @@ class PPOTelemetry:
         self.current_epoch_metrics["gen_time_s"] = round(gen_time, 1)
         self.current_epoch_metrics["learn_time_s"] = round(learn_time, 1)
 
-    def log_eval_generations(self, ppo_epoch, texts, rewards):
+    def log_eval_generations(self, step_num, texts, rewards):
         """Log a sample of generated text to wandb as a Table."""
         if not self.use_wandb:
             return
             
-        table = wandb.Table(columns=["PPO Epoch", "Generated Text", "Reward"])
+        table = wandb.Table(columns=["Step", "Generated Text", "Reward"])
         # Log up to 10 samples to prevent massive tables
         for text, reward in zip(texts[:10], rewards[:10]):
-            table.add_data(ppo_epoch+1, text, reward)
+            table.add_data(step_num, text, reward)
             
-        wandb.log({f"eval_samples/epoch_{ppo_epoch+1}": table}, step=ppo_epoch)
+        wandb.log({"eval_samples": table}, step=step_num)
 
     def finalize_epoch(self):
         """Average inner-loop metrics, flush to history list, and print."""
