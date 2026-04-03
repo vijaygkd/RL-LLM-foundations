@@ -86,7 +86,7 @@ class PPOTelemetry:
             print(f"⏱  Gen: {m['gen_time_s']}s | Learn: {m['learn_time_s']}s")
 
         if self.use_wandb:
-            wandb.log(self.current_epoch_metrics, step=m['ppo_epoch'])
+            wandb.log(self.current_epoch_metrics, step=m['ppo_epoch'] + 1)
 
     def save_to_csv(self, filename="ppo_metrics.csv"):
         """Dump the entire history to a CSV file."""
