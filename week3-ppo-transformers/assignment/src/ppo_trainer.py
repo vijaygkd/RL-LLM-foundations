@@ -339,6 +339,16 @@ class PPOTrainer:
         optimizer = torch.optim.Adam(self.ppo_model.parameters(), lr=self.config.lr)
         optimizer.zero_grad()
         
+        # Initial Baseline Evaluation
+        print("Evaluating Baseline Policy (Step 0)...")
+        eval_reward, sample_texts, sample_rewards = self.evaluate()
+        print(f"--> Baseline Eval Reward: {eval_reward:.4f}")
+        if self.logger.use_wandb:
+            import wandb
+            wandb.log({"eval_reward": eval_reward}, step=0)
+            self.logger.log_eval_generations(-1, sample_texts, sample_rewards)
+
+        ############################################################### LOOP ###############################################################
         # Rollout generation loop
         for ppo_epoch in tqdm(range(self.config.ppo_epochs), desc="PPO Training Epochs"):
             # 1. Generate responses using Old policy from dataset prompts
