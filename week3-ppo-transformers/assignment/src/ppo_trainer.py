@@ -68,7 +68,7 @@ class PPOTrainer:
         # TODO - can this load the reward model trained in week 2?
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(
             config.reward_model_name,
-            torch_dtype=torch.bfloat16
+            dtype=torch.bfloat16
         ).to(DEVICE).requires_grad_(False)
         # -------------------------------------
         # Dataset
