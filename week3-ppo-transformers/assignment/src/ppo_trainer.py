@@ -19,16 +19,16 @@ class TrainingConfig:
     reward_model_name: str
     # dataset
     dataset_name: str               = "stanfordnlp/imdb"
-    num_prompts: int                = 512             # rollout dataset size
-    gen_batch_size: int             = 32               
-    reward_batch_size: int          = 64
+    num_prompts: int                = 2048             # rollout dataset size
+    gen_batch_size: int             = 512               
+    reward_batch_size: int          = 128
     prompt_token_len: int           = 8
     max_new_tokens: int             = 24            # T_total = T_prompt + T_new = 8 + 24 = 32
     # training
     ppo_epochs: int                 = 100
     learning_epochs: int            = 4             # number of learning epoch per set of rollouts --> InstructGPT paper uses 4
-    batch_size: int                 = 16             # learning loop batch size
-    grad_accumulation_steps: int    = 4             # effective batch size = batch_size * gradient_accumulation_steps = 64
+    batch_size: int                 = 128             # learning loop batch size
+    grad_accumulation_steps: int    = 1             # effective batch size = batch_size * gradient_accumulation_steps = 64
     eval_interval: int              = 10            # run evaluation every N epochs
     # hyper-parameters
     clip_epsilon: float             = 0.2
@@ -37,7 +37,7 @@ class TrainingConfig:
     gae_lambda: float               = 0.95
     value_loss_coef: float          = 0.1           # PPO paper = 0.5 and TRL default 0.1 prevents Critic (MSE) from overwhelming Actor (Log-Probs)
     # optimizers
-    lr: float                       = 1e-6
+    lr: float                       = 1e-5
     max_grad_norm: float            = 1.0
     checkpoint_dir: str             = "checkpoints/ppo_final_actor"
 
@@ -538,6 +538,7 @@ if __name__ == "__main__":
     prod_config = TrainingConfig(
         model_name="Qwen/Qwen3-0.6B",
         reward_model_name="cardiffnlp/twitter-roberta-base-sentiment-latest",
+        save_dir="checkpoints/ppo_final_actor"
     )
 
     trainer = PPOTrainer(config=prod_config)
