@@ -4,5 +4,4 @@
 # uv pip install -r requirements_cuda.txt --no-build-isolation
 #
 
-flash-attn==2.7.0.post2
 accelerate

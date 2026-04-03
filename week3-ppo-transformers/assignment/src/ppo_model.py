@@ -15,11 +15,9 @@ class PPOModel(nn.Module):
     """
     def __init__(self, model_name: str, add_value_head: bool = True):
         super().__init__()
-        attn_impl = "flash_attention_2" if torch.cuda.is_available() else "sdpa"
         self.actor = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.bfloat16,
-            attn_implementation=attn_impl
+            dtype=torch.bfloat16
         )
         self.lm_head = self.actor.lm_head
         self.value_head = None
