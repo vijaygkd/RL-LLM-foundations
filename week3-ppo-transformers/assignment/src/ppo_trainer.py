@@ -341,15 +341,12 @@ class PPOTrainer:
         for ppo_epoch in tqdm(range(self.config.ppo_epochs), desc="PPO Training Epochs"):
             # 1. Generate responses using Old policy from dataset prompts
             gen_start = time.time()
-            print(f"Generating fresh rollouts [{self.config.num_prompts}] ...")
             generated_ids, gen_padding_masks, gen_output_masks, gen_texts_list = self.generate_responses()    # (num_prompts, T), (num_prompts, T), (num_prompts, T), (num_prompts,)
             # 2. Get rewards using static reward model for generated sequences
-            print("Getting rewards ...")
             rewards = get_sentiment_rewards(gen_texts_list, self.reward_model, self.reward_tokenizer, self.config.reward_batch_size)    # (num_prompts,)
 
             num_steps = len(generated_ids) // self.config.batch_size
             # 3. Calculate Old and Ref policy log-prob and values for entire rollouts
-            print("Calculating Old and Ref policy log-prob and values ...")
             old_log_probs_list = []
             old_critic_values_list = []
             ref_log_probs_list = []
@@ -382,7 +379,7 @@ class PPOTrainer:
             # 4. Calculate Advantages using GAE 
             # PRO-TIP: In RL, rewards, KL-penalty and Advantages are static observations of the environment. (No gradient should flow through environment)
             # These are computed once per rollout using the Old policy and are not updated during policy learning. (Check CHRONICLES.md)
-            print("Calculating Advantages ...")
+            # 4. Calculate Advantages using GAE
             with torch.no_grad():
                 kl_penalty = self.compute_kl_token_penalty(                                                         # (num_prompts, T-1)
                     old_log_probs, ref_log_probs,
@@ -407,7 +404,6 @@ class PPOTrainer:
             # 5. Policy Learning loop
             learn_start = time.time()
             for learning_epoch in range(self.config.learning_epochs):                   # epochs over same batch of rollouts
-                print(f"Policy Learning Epoch {learning_epoch+1}/{self.config.learning_epochs}...")
                 
                 for i in range(num_steps):    
                     batch_idx = i * self.config.batch_size
@@ -469,10 +465,9 @@ class PPOTrainer:
                         optimizer.zero_grad()
 
                 # end of learning epoch
-                print(f"PPO epoch {ppo_epoch+1} learning epoch {learning_epoch+1}/{self.config.learning_epochs} completed")
             
             learn_time = time.time() - learn_start
-            print(f"⏱  Generation: {gen_time:.1f}s | Learning: {learn_time:.1f}s | Ratio: {gen_time/(learn_time+1e-6):.1f}x")
+            self.logger.log_timing(gen_time, learn_time)
 
             # 6. Periodic Evaluation
             if (ppo_epoch + 1) % self.config.eval_interval == 0:
@@ -484,7 +479,6 @@ class PPOTrainer:
 
             # end of output epoch
             self.logger.finalize_epoch()
-            print(f"PPO epoch {ppo_epoch+1}/{self.config.ppo_epochs} completed")
         
         # end of train
         self.logger.save_to_csv()

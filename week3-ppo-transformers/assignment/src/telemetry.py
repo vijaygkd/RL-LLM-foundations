@@ -29,7 +29,9 @@ class PPOTelemetry:
             "mean_kl_penalty": kl_penalty.mean().item(),
             "mean_advantage": advantage.mean().item(),
             "mean_return": returns.mean().item(),
-            "eval_reward": None  # Optional metric evaluated every N steps
+            "eval_reward": None,
+            "gen_time_s": None,
+            "learn_time_s": None
         }
         # Reset learning step accumulators
         for k in self.learning_step_metrics:
@@ -47,6 +49,11 @@ class PPOTelemetry:
     def log_eval(self, eval_reward):
         """Log evaluation reward (e.g. from an unseen holdout set)."""
         self.current_epoch_metrics["eval_reward"] = eval_reward
+
+    def log_timing(self, gen_time, learn_time):
+        """Log wall-clock time for generation vs learning phases."""
+        self.current_epoch_metrics["gen_time_s"] = round(gen_time, 1)
+        self.current_epoch_metrics["learn_time_s"] = round(learn_time, 1)
 
     def log_eval_generations(self, ppo_epoch, texts, rewards):
         """Log a sample of generated text to wandb as a Table."""
@@ -72,11 +79,11 @@ class PPOTelemetry:
         
         # Print summary
         m = self.current_epoch_metrics
-        print(f"--- Epoch {m['ppo_epoch'] + 1} Telemetry ---")
-        print(f"Reward: {m['mean_reward']:.4f} | KL: {m['mean_kl_penalty']:.4f}")
-        print(f"Actor Loss: {m['actor_loss']:.4f} | Critic Loss: {m['critic_loss']:.4f}")
-        print(f"Clip Fraction: {m['clip_fraction']:.4f}")
-        print("-" * 30)
+        print(f"--- Epoch {m['ppo_epoch'] + 1} ---")
+        print(f"Reward: {m['mean_reward']:.4f} | KL: {m['mean_kl_penalty']:.4f} | Clip: {m['clip_fraction']:.4f}")
+        print(f"Actor: {m['actor_loss']:.4f} | Critic: {m['critic_loss']:.4f}")
+        if m.get('gen_time_s') is not None:
+            print(f"⏱  Gen: {m['gen_time_s']}s | Learn: {m['learn_time_s']}s")
 
         if self.use_wandb:
             wandb.log(self.current_epoch_metrics, step=m['ppo_epoch'])
