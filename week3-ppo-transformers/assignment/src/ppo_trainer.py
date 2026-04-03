@@ -67,7 +67,9 @@ class PPOTrainer:
         self.reward_tokenizer = AutoTokenizer.from_pretrained(config.reward_model_name)
         # TODO - can this load the reward model trained in week 2?
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(
-            config.reward_model_name).to(DEVICE).requires_grad_(False)
+            config.reward_model_name,
+            torch_dtype=torch.bfloat16
+        ).to(DEVICE).requires_grad_(False)
         # -------------------------------------
         # Dataset
         print("Loading dataset... ", config.dataset_name)
@@ -91,6 +93,9 @@ class PPOTrainer:
             split="test[:128]"  # Holdout set for periodic evaluation
         )
         self.logger = PPOTelemetry(config=self.config)
+        
+        print("Compiling PPO model for acceleration...")
+        self.ppo_model = torch.compile(self.ppo_model)
 
 
     @torch.no_grad()

@@ -15,7 +15,11 @@ class PPOModel(nn.Module):
     """
     def __init__(self, model_name: str, add_value_head: bool = True):
         super().__init__()
-        self.actor = AutoModelForCausalLM.from_pretrained(model_name)
+        self.actor = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.bfloat16,
+            attn_implementation="flash_attention_2"
+        )
         self.lm_head = self.actor.lm_head
         self.value_head = None
         if add_value_head:
