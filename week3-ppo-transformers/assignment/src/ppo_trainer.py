@@ -540,7 +540,6 @@ if __name__ == "__main__":
         reward_model_name="cardiffnlp/twitter-roberta-base-sentiment-latest",
     )
 
-    # TODO - use prod_config for actual training
-    trainer = PPOTrainer(config=debug_config)
+    trainer = PPOTrainer(config=prod_config)
     # train the model
     trainer.train()
