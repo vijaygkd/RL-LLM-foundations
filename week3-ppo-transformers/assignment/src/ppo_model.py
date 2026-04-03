@@ -34,7 +34,7 @@ class PPOModel(nn.Module):
             value_output: (B, T, 1)
         """
         with capture_inputs(self.actor.lm_head) as act:
-            lm_output = self.actor(input_ids, attention_mask)
+            lm_output = self.actor(input_ids=input_ids, attention_mask=attention_mask)
             lm_input = act["input"][0]
 
         value_output = None
