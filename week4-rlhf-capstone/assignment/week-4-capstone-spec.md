@@ -12,7 +12,8 @@ You must interleave the components built over the last three weeks:
 3.  **RL Orchestrator:** Adopt the `ppo_trainer` constructed in Week 3 to drive the generation loop and parameter updates.
 
 ### 2. The Multi-Epoch Tuning Loop
-Provision a multi-epoch, batched sequence generator using a set of open-ended conversational prompts.
+Provision a multi-epoch, batched sequence generator using a set of open-ended conversational prompts. 
+**Target Dataset:** Utilize the prompt substrings from the `Anthropic/hh-rlhf` dataset (the same distribution your Reward Model was trained on) to initiate policy generation.
 1.  **Environment Initialization:** Seed your data samplers. Evaluate pre-optimization perplexity over a validation subset.
 2.  **Reward Maximization:** Over multiple gradient accumulation steps, maximize the output of $R_\phi$ applied conditionally over generated text.
 3.  **Metrics Tracking:** Rigorously log parameter dynamics.
@@ -29,5 +30,12 @@ Empirically map the Alignment Tax by executing parallel training traces, varying
 ### 4. Technical Deliverables
 *   `train_rlhf_capstone.py`: An end-to-end execution script utilizing a robust training framework (e.g., 🤗 `accelerate` or DeepSpeed ZeRO-2/3) to manage multi-node/multi-GPU synchronization.
 *   **Documentation:** A brief markdown analysis directly attributing empirical variances in natural language outputs back to your algorithmic PPO hyperparameter settings.
+
+## Success Criteria
+To pass this milestone, your documentation and telemetry must demonstrate:
+* **Stable Critic Convergence:** Critic MSE loss must descend and stabilize without immediate divergence.
+* **Controlled Distribution Shift:** The KL divergence $D_{KL}(\pi_\theta \parallel \pi_{ref})$ must remain bounded (e.g., $2.0 \leq \text{KL} \leq 10.0$).
+* **Reward Growth:** A statistically significant increase in the raw reward scalar relative to the 0th epoch.
+* **Coherence Retention:** No mode collapse in generation (e.g., avoiding infinite loops, repeating single tokens, or emitting strings of punctuation). Mean generation lengths should resemble the reference policy.
 
 Good luck. Moving past toy prototypes into multi-billion parameter RL landscapes is where theory meets raw systems engineering constraint.
