@@ -1,6 +1,8 @@
 from dataclasses import dataclass
+import time
 import torch
 import torch.nn.functional as F
+from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification
 
 from ppo_model import PPOModel
@@ -161,12 +163,12 @@ class PPOTrainer:
         sample_texts = []
         sample_rewards = []
         
-        for batch in self.eval_dataloader:
-            input_ids = batch["input_ids"].to(DEVICE)
-            attention_mask = batch["attention_mask"].to(DEVICE)
+        for input_ids, attention_mask in self.eval_dataloader:
+            input_ids = input_ids.to(DEVICE)
+            attention_mask = attention_mask.to(DEVICE)
             
             # Generate responses
-            outputs = self.ppo_model.actor_model.generate(
+            outputs = self.ppo_model.actor.generate(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 max_new_tokens=self.config.max_new_tokens,
@@ -178,9 +180,10 @@ class PPOTrainer:
             
             gen_texts = self.text_tokenizer.batch_decode(outputs, skip_special_tokens=True)
             rewards = get_sentiment_rewards(
-                texts=gen_texts,
-                reward_model_name=self.config.reward_model_name,
-                batch_size=self.config.reward_batch_size
+                gen_texts,
+                self.reward_model, 
+                self.reward_tokenizer, 
+                self.config.reward_batch_size
             )
             eval_rewards.append(rewards.mean().item())
             if not sample_texts:  # Capture first batch only
@@ -335,8 +338,9 @@ class PPOTrainer:
         optimizer.zero_grad()
         
         # Rollout generation loop
-        for ppo_epoch in range(self.config.ppo_epochs):
+        for ppo_epoch in tqdm(range(self.config.ppo_epochs), desc="PPO Training Epochs"):
             # 1. Generate responses using Old policy from dataset prompts
+            gen_start = time.time()
             print(f"Generating fresh rollouts [{self.config.num_prompts}] ...")
             generated_ids, gen_padding_masks, gen_output_masks, gen_texts_list = self.generate_responses()    # (num_prompts, T), (num_prompts, T), (num_prompts, T), (num_prompts,)
             # 2. Get rewards using static reward model for generated sequences
@@ -398,9 +402,10 @@ class PPOTrainer:
                 # IMPORTANT: normalize advantages - used for PPO clipped loss, not for value loss
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
             
-            # TODO - log time spent during rollout generation vs policy training. Might reveal bottleneck in PPO/RLHF training.
+            gen_time = time.time() - gen_start
             
             # 5. Policy Learning loop
+            learn_start = time.time()
             for learning_epoch in range(self.config.learning_epochs):                   # epochs over same batch of rollouts
                 print(f"Policy Learning Epoch {learning_epoch+1}/{self.config.learning_epochs}...")
                 
@@ -431,8 +436,7 @@ class PPOTrainer:
                     prob_ratio_clipped = torch.clip(                                                # (B, T-1)
                         prob_ratio, 1 - self.config.clip_epsilon, 1 + self.config.clip_epsilon
                     )
-                    # TODO - log how frequently prob_ratio is getting clipped, 
-                    # TODO how frequently loss_actor is clipped ie. zero grad
+
                     unclipped = prob_ratio *  batch_advantages                                      # (B, T-1)
                     clipped = prob_ratio_clipped * batch_advantages                                 # (B, T-1)
                     loss_actor = - torch.min(unclipped, clipped)                                    # (B, T-1)
@@ -467,6 +471,9 @@ class PPOTrainer:
                 # end of learning epoch
                 print(f"PPO epoch {ppo_epoch+1} learning epoch {learning_epoch+1}/{self.config.learning_epochs} completed")
             
+            learn_time = time.time() - learn_start
+            print(f"⏱  Generation: {gen_time:.1f}s | Learning: {learn_time:.1f}s | Ratio: {gen_time/(learn_time+1e-6):.1f}x")
+
             # 6. Periodic Evaluation
             if (ppo_epoch + 1) % self.config.eval_interval == 0:
                 print(f"Running periodic evaluation on holdout set...")
@@ -485,13 +492,12 @@ class PPOTrainer:
         self.logger.finalize_training()
         
         print("Saving final language model checkpoint...")
-        self.ppo_model.actor_model.save_pretrained(self.config.checkpoint_dir)
+        self.ppo_model.actor.save_pretrained(self.config.checkpoint_dir)
         self.text_tokenizer.save_pretrained(self.config.checkpoint_dir)
         
         print("-" * 50)
         print(f"PPO training completed")
         
-
 
 
 ########################################
@@ -536,23 +542,12 @@ if __name__ == "__main__":
         log_freq=1,
         save_freq=1
     )
+    prod_config = TrainingConfig(
+        model_name="Qwen/Qwen3-0.6B",
+        reward_model_name="cardiffnlp/twitter-roberta-base-sentiment-latest",
+    )
 
+    # TODO - use prod_config for actual training
     trainer = PPOTrainer(config=debug_config)
     # train the model
     trainer.train()
-
-
-
-    # # generate responses
-    # generated_ids, gen_padding_masks, gen_output_masks, gen_texts_list = trainer.generate_responses()
-    # # get log probs and values
-    # log_prbs, critic_output = trainer.get_log_probs_and_values(trainer.ppo_model, generated_ids, gen_padding_masks)
-    # ref_log_prbs, _ = trainer.get_log_probs_and_values(trainer.ref_model, generated_ids, gen_padding_masks)
-    # # get rewards
-    # rewards = get_sentiment_rewards(gen_texts_list, trainer.reward_model, trainer.reward_tokenizer, config.reward_batch_size)
-    # # compute advantages
-    # advantages = trainer.compute_gae_advantages(rewards, log_prbs - ref_log_prbs, critic_output, gen_output_masks)
-    # seq_adv = advantages.sum(dim=1)
-    # for i in range(len(gen_texts_list)):
-    #     print("Score: ", rewards[i].item(), "Seq Adv: ", seq_adv[i].item(), "Text: ", gen_texts_list[i])
-    #     print("-"*30)
