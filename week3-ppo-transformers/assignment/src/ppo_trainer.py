@@ -16,19 +16,16 @@ class TrainingConfig:
     reward_model_name: str
     # dataset
     dataset_name: str               = "stanfordnlp/imdb"
-    num_prompts: int                = 64             # TODO - ?? Might be better to generate large batch of rollouts in one go 
-                                                            # to save inference time and reduce GPU wall-time. 
-                                                            # Or should we do it in batches..?
-    gen_batch_size: int             = 4     # 32
-    reward_batch_size: int          = 4
-    num_rollouts_per_prompt: int    = 1     # TODO - Do we need multiple rollouts per prompt? 
+    num_prompts: int                = 512             # rollout dataset size
+    gen_batch_size: int             = 64               
+    reward_batch_size: int          = 64
     prompt_token_len: int           = 8
     max_new_tokens: int             = 24            # T_total = T_prompt + T_new = 8 + 24 = 32
     # training
-    ppo_epochs: int                 = 1
+    ppo_epochs: int                 = 100
     learning_epochs: int            = 4             # number of learning epoch per set of rollouts --> InstructGPT paper uses 4
-    batch_size: int                 = 4             # learning loop batch size
-    grad_accumulation_steps: int    = 4             # effective batch size = batch_size * gradient_accumulation_steps = 16
+    batch_size: int                 = 16             # learning loop batch size
+    grad_accumulation_steps: int    = 4             # effective batch size = batch_size * gradient_accumulation_steps = 64
     # hyper-parameters
     clip_epsilon: float             = 0.2
     kl_beta: float                  = 0.01
@@ -244,7 +241,8 @@ class PPOTrainer:
         advantages = torch.zeros_like(td_errors)                                                # (B, T-1)
         # IMP - init a_next after last output token as 0
         a_next = torch.zeros(critic_values.shape[0], device=DEVICE)                             # (B, 1)    use last token value for bootstrapping if not terminal
-        for t in range(seq_len - 2, -1, -1):                                # TODO  IMP ----> is there way to prevent the for loop and use a vectorized approach to speed up computation???
+        for t in range(seq_len - 2, -1, -1):
+            # calculation vectorized over timestamp dimension across batches
             a_t = td_errors[:, t] + self.config.gae_gamma * self.config.gae_lambda * a_next     # (B, 1) at t
             a_t = a_t * gen_output_mask[:, t]                                                   # (B, 1)    zero out a_t for prompt and padding tokens
             a_next = a_t                                                                        # (B, 1)    update a_next for next iteration
@@ -263,7 +261,7 @@ class PPOTrainer:
         # Psuedo code:
         # Run PPO training loop for N ppo_steps
         #     (step 1- 4: No Grad)
-        #     1. Generate responses from actor from dataset prompts           --> TODO: how many rollouts responses per prompt?
+        #     1. Generate responses from actor from dataset prompts
         #     2. Compute sequence-level rewards using static reward model
         #     3. Old policy log-prob and values from PPO model (actor, critic)                                
         #     4. Compute Advantages using GAE (using rewards, KL, old values)
@@ -274,6 +272,8 @@ class PPOTrainer:
         #             b. Compute PPO loss = PPO clipped loss + Value Loss (MSE) 
         #             c. Backprop
         print("Starting PPO training...")
+        num_update_steps = self.config.ppo_epochs * self.config.learning_epochs * self.config.num_prompts / self.config.batch_size  // (self.config.batch_size * self.config.grad_accumulation_steps)
+        print(f"Number of learning steps: {num_update_steps} = Epochs {self.config.ppo_epochs} * Learning Epochs {self.config.learning_epochs} * Prompts {self.config.num_prompts} / (Batch Size {self.config.batch_size} * Gradient Accumulation Steps {self.config.grad_accumulation_steps})")
 
         # Initialize optimizer - actor and critic parameters
         optimizer = torch.optim.Adam(self.ppo_model.parameters(), lr=self.config.lr)
@@ -338,6 +338,8 @@ class PPOTrainer:
                 returns = advantages + old_critic_values[:, :-1]                                                    # (num_prompts, T-1)
                 # IMPORTANT: normalize advantages - used for PPO clipped loss, not for value loss
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            
+            # TODO - log time spent during rollout generation vs policy training. Might reveal bottleneck in PPO/RLHF training.
             
             # 5. Policy Learning loop
             for learning_epoch in range(self.config.learning_epochs):                   # epochs over same batch of rollouts
