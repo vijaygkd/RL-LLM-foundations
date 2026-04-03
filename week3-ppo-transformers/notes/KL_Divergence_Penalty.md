@@ -30,6 +30,8 @@ This is **always ≥ 0** (by Gibbs' inequality). It equals 0 *only* when $\pi_\t
 
 The per-token calculation is just **one sample** from this expectation. A single sample *can* be negative — that is the variance of the estimator, not a logical flaw. Over many tokens and rollouts the average converges to the true (non-negative) KL.
 
+True KL requires: $$= \sum_{a \in V} \pi_\theta(a) \cdot \left( \log \pi_\theta(a) - \log \pi_{ref}(a) \right)$$ 
+
 ### 2. Probability distributions must sum to 1
 
 This is the key constraint that prevents exploitation of Case 3.

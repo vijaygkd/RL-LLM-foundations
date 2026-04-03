@@ -471,7 +471,6 @@ class PPOTrainer:
 
             # 6. Periodic Evaluation
             if (ppo_epoch + 1) % self.config.eval_interval == 0:
-                print(f"Running periodic evaluation on holdout set...")
                 eval_reward, sample_texts, sample_rewards = self.evaluate()
                 self.logger.log_eval(eval_reward)
                 self.logger.log_eval_generations(ppo_epoch, sample_texts, sample_rewards)
@@ -485,11 +484,11 @@ class PPOTrainer:
         self.logger.plot()
         self.logger.finalize_training()
         
+        print("-" * 50)
         print("Saving final language model checkpoint...")
         self.ppo_model.actor.save_pretrained(self.config.checkpoint_dir)
         self.text_tokenizer.save_pretrained(self.config.checkpoint_dir)
         
-        print("-" * 50)
         print(f"PPO training completed")
         
 

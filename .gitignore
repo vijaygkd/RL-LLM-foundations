@@ -11,6 +11,8 @@ __pycache__/
 .obsidian/
 
 wandb/
+checkpoints/
+logs/
 
 # repo specific
 *_checkpoint/
