@@ -155,6 +155,8 @@ class PPOTrainer:
         """Run standard generation on the unseen eval dataset and compute the mean reward."""
         self.ppo_model.eval()
         eval_rewards = []
+        sample_texts = []
+        sample_rewards = []
         
         for batch in self.eval_dataloader:
             input_ids = batch["input_ids"].to(DEVICE)
@@ -178,9 +180,12 @@ class PPOTrainer:
                 batch_size=self.config.reward_batch_size
             )
             eval_rewards.append(rewards.mean().item())
+            if not sample_texts:  # Capture first batch only
+                sample_texts = gen_texts
+                sample_rewards = rewards.tolist()
             
         self.ppo_model.train()
-        return sum(eval_rewards) / len(eval_rewards) if eval_rewards else 0.0
+        return sum(eval_rewards) / len(eval_rewards) if eval_rewards else 0.0, sample_texts, sample_rewards
 
     @torch.no_grad()
     def get_log_probs_and_values(self, model: PPOModel, generation_ids: torch.Tensor, generation_attn_masks: torch.Tensor):
@@ -461,8 +466,9 @@ class PPOTrainer:
             # 6. Periodic Evaluation
             if (ppo_epoch + 1) % self.config.eval_interval == 0:
                 print(f"Running periodic evaluation on holdout set...")
-                eval_reward = self.evaluate()
+                eval_reward, sample_texts, sample_rewards = self.evaluate()
                 self.logger.log_eval(eval_reward)
+                self.logger.log_eval_generations(ppo_epoch, sample_texts, sample_rewards)
                 print(f"--> Eval Reward: {eval_reward:.4f}")
 
             # end of output epoch
@@ -514,11 +520,21 @@ def get_sentiment_rewards(generated_texts: list[str], reward_model, reward_token
 
 
 if __name__ == "__main__":
-    config = TrainingConfig(
-        model_name="Qwen/Qwen3-0.6B",
-        reward_model_name="cardiffnlp/twitter-roberta-base-sentiment-latest"
+
+    debug_config = TrainingConfig(
+        base_model_name="Qwen/Qwen2.5-0.5B",
+        reward_model_name="cardiffnlp/twitter-roberta-base-sentiment-latest",
+        num_prompts=32,            # debug scale
+        gen_batch_size=4,          # debug scale
+        reward_batch_size=4,       # debug scale
+        ppo_epochs=2,              # debug scale
+        batch_size=4,              # debug scale
+        eval_interval=1,            # debug scale
+        log_freq=1,
+        save_freq=1
     )
-    trainer = PPOTrainer(config)
+
+    trainer = PPOTrainer(config=debug_config)
     # train the model
     trainer.train()
 

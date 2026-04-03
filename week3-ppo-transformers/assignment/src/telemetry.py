@@ -48,6 +48,18 @@ class PPOTelemetry:
         """Log evaluation reward (e.g. from an unseen holdout set)."""
         self.current_epoch_metrics["eval_reward"] = eval_reward
 
+    def log_eval_generations(self, ppo_epoch, texts, rewards):
+        """Log a sample of generated text to wandb as a Table."""
+        if not self.use_wandb:
+            return
+            
+        table = wandb.Table(columns=["PPO Epoch", "Generated Text", "Reward"])
+        # Log up to 10 samples to prevent massive tables
+        for text, reward in zip(texts[:10], rewards[:10]):
+            table.add_data(ppo_epoch+1, text, reward)
+            
+        wandb.log({f"eval_samples": table}, step=ppo_epoch)
+
     def finalize_epoch(self):
         """Average inner-loop metrics, flush to history list, and print."""
         for key, values in self.learning_step_metrics.items():
