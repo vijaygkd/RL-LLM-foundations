@@ -37,7 +37,7 @@ class TrainingConfig:
     gae_lambda: float               = 0.95
     value_loss_coef: float          = 0.1           # PPO paper = 0.5 and TRL default 0.1 prevents Critic (MSE) from overwhelming Actor (Log-Probs)
     # optimizers
-    lr: float                       = 1e-5
+    lr: float                       = 5e-6
     max_grad_norm: float            = 1.0
     checkpoint_dir: str             = "checkpoints/ppo_final_actor"
 
@@ -546,9 +546,9 @@ if __name__ == "__main__":
         eval_interval=1,            # debug scale
     )
     prod_config = TrainingConfig(
-        model_name="Qwen/Qwen3-0.6B",
+        model_name="google/gemma-4-E4B",
         reward_model_name="cardiffnlp/twitter-roberta-base-sentiment-latest",
-        checkpoint_dir="checkpoints/ppo_final_actor"
+        checkpoint_dir="checkpoints/gemma-4-E4B-ppo_final_actor"
     )
 
     trainer = PPOTrainer(config=prod_config)
