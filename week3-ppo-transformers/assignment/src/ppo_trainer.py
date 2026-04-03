@@ -506,7 +506,7 @@ def get_sentiment_rewards(generated_texts: list[str], reward_model, reward_token
     Return scalar sentiment reward for each generated text
     Reward = Degree of positivity
     """
-    assert len(generated_texts) % reward_batch_size == 0, "Number of generated texts must be divisible by reward_batch_size"
+
     rewards = []
     with torch.no_grad():
         for i in range(0, len(generated_texts), reward_batch_size):
