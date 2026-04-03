@@ -80,7 +80,7 @@ class PPOTrainer:
             prompt_token_len=config.prompt_token_len,
             shuffle=True,
             num_workers=4,
-            split="train[:32]"
+            split="train"
         )
         print("Loading evaluation dataset...")
         self.eval_dataloader = build_prompt_dataloader(
@@ -548,7 +548,7 @@ if __name__ == "__main__":
     prod_config = TrainingConfig(
         model_name="Qwen/Qwen3-0.6B",
         reward_model_name="cardiffnlp/twitter-roberta-base-sentiment-latest",
-        save_dir="checkpoints/ppo_final_actor"
+        checkpoint_dir="checkpoints/ppo_final_actor"
     )
 
     trainer = PPOTrainer(config=prod_config)
