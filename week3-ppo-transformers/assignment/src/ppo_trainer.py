@@ -21,14 +21,14 @@ class TrainingConfig:
     dataset_name: str               = "stanfordnlp/imdb"
     num_prompts: int                = 2048             # rollout dataset size
     gen_batch_size: int             = 512               
-    reward_batch_size: int          = 128
+    reward_batch_size: int          = 512
     prompt_token_len: int           = 8
     max_new_tokens: int             = 24            # T_total = T_prompt + T_new = 8 + 24 = 32
     # training
     ppo_epochs: int                 = 100
     learning_epochs: int            = 4             # number of learning epoch per set of rollouts --> InstructGPT paper uses 4
-    batch_size: int                 = 128             # learning loop batch size
-    grad_accumulation_steps: int    = 1             # effective batch size = batch_size * gradient_accumulation_steps = 64
+    batch_size: int                 = 64             # learning loop batch size
+    grad_accumulation_steps: int    = 2             # effective batch size = batch_size * gradient_accumulation_steps = 64
     eval_interval: int              = 10            # run evaluation every N epochs
     # hyper-parameters
     clip_epsilon: float             = 0.2
