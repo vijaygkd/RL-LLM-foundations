@@ -44,7 +44,7 @@ After manually increasing the **learning rate by 10x** to `1e-5` (and vastly exp
 3. **Critic Loss** is decreasing smoothly, showing stable value function fit.
 4. **Actor Loss** is trending downward, with healthy bounciness reflecting natural sampling variance over the wider batch distributions.
 5. **Training Rewards** saturated impressively from **~30% up to >95% positive.**
-6. **Evaluation Rewards** mirrored the training climb, ascending from **~60% to >95%.**
+6. **Evaluation Rewards** mirrored the training climb, ascending from **~30% to >95%** is a proof of convergence.
 
 **Reasoning:**
 1. **Unblocking the Trust Region:** The higher learning rate shattered the local minimum. Symmetrical 15% clipping proves the policy is finally taking aggressive optimization steps instead of tiptoeing.
