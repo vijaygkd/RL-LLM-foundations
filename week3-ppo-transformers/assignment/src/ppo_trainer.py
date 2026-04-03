@@ -35,7 +35,6 @@ class TrainingConfig:
     gae_gamma: float                = 0.99
     gae_lambda: float               = 0.95
     value_loss_coef: float          = 1
-    entropy_coef: float             = 0.2
     # optimizers
     lr: float                       = 1e-6
     max_grad_norm: float            = 1.0
@@ -92,6 +91,7 @@ class PPOTrainer:
             generated_output_mask: Generated output mask, (num_prompts, T_total)  1: generated token, 0: prompt or padding token
             gen_texts_list: list of generated texts (num_prompts,)
         """
+        target_len = self.config.prompt_token_len + self.config.max_new_tokens
         num_generation_batches = self.config.num_prompts // self.config.gen_batch_size
         assert num_generation_batches * self.config.gen_batch_size == self.config.num_prompts, "num_prompts must be divisible by gen_batch_size"
         
@@ -115,12 +115,19 @@ class PPOTrainer:
                 gen_output_mask = gen_padding_mask.clone()            # right padding
                 gen_output_mask[:, :input_ids.shape[1]-1] = 0         # (left padding + prompt tokens) are masked except last token where first token is generated
 
+                # right pad to target length
+                pad_len = target_len - generation_ids.shape[1]
+                if pad_len > 0:
+                    # F.pad format for 1D/2D: (pad_left, pad_right) for the last dimension
+                    generation_ids = F.pad(generation_ids, (0, pad_len), value=self.text_tokenizer.pad_token_id)
+                    gen_padding_mask = F.pad(gen_padding_mask, (0, pad_len), value=0)
+                    gen_output_mask = F.pad(gen_output_mask, (0, pad_len), value=0)
+
                 gen_ids_list.append(generation_ids)
                 gen_padding_masks_list.append(gen_padding_mask)
                 gen_output_mask_list.append(gen_output_mask)
                 gen_texts_list.extend(generated_texts)
 
-        # BUG - gen_ids can be of different len if all seq EOS early.
         generated_ids = torch.cat(gen_ids_list, dim=0)                            # (num_prompts, T)
         generated_padding_masks = torch.cat(gen_padding_masks_list, dim=0)        # (num_prompts, T) 
         generated_output_mask = torch.cat(gen_output_mask_list, dim=0)            # (num_prompts, T) 
@@ -327,7 +334,9 @@ class PPOTrainer:
                     old_critic_values,                                                                              # (num_prompts, T)
                     gen_output_masks                                                                                # (num_prompts, T)
                 )
-                # normalize advantages (TODO - should be do this at batch level? or dataset level?)
+                # target for value loss
+                returns = advantages + old_critic_values[:, :-1]                                                    # (num_prompts, T-1)
+                # IMPORTANT: normalize advantages - used for PPO clipped loss, not for value loss
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
             
             # 5. Policy Learning loop
@@ -340,10 +349,11 @@ class PPOTrainer:
                     batch_generated_ids = generated_ids[batch_idx:batch_idx+self.config.batch_size]                 # (B, T)
                     batch_gen_padding_masks = gen_padding_masks[batch_idx:batch_idx+self.config.batch_size]         # (B, T)
                     batch_gen_output_masks = gen_output_masks[batch_idx:batch_idx+self.config.batch_size]           # (B, T)
+                    num_output_tokens = batch_gen_output_masks[:, :-1].sum()                                        # scalar
                     # Get old log-probs and values and Advantages
                     batch_old_log_probs = old_log_probs[batch_idx:batch_idx+self.config.batch_size]                 # (B, T-1)
-                    batch_old_critic_values = old_critic_values[batch_idx:batch_idx+self.config.batch_size]         # (B, T)
                     batch_advantages = advantages[batch_idx:batch_idx+self.config.batch_size]                       # (B, T-1)
+                    batch_returns = returns[batch_idx:batch_idx+self.config.batch_size]                             # (B, T-1)
                     
                     # a. Calculate current policy log-probs, critic values
                     # PRO-TIP --> gradients will flow through this forward pass for PPO model
@@ -366,14 +376,13 @@ class PPOTrainer:
                     clipped = prob_ratio_clipped * batch_advantages                                 # (B, T-1)
                     loss_actor = - torch.min(unclipped, clipped)                                    # (B, T-1)
                     loss_actor = loss_actor * batch_gen_output_masks[:, :-1]                        # (B, T-1) zero out padding + prompt tokens loss
-                    loss_actor = loss_actor.mean()                                                  # scalar
+                    loss_actor = loss_actor.sum() / num_output_tokens                               # scalar - divide by number of output tokens instead of .mean() which would average over padding tokens too
 
                     # Critic loss
-                    value_target = batch_advantages + batch_old_critic_values[:, :-1]               # (B, T-1)  ignore last token used for bootstrapping
                     value_pred = current_critic_values[:, :-1]                                      # (B, T-1)  ignore last token used for bootstrapping
-                    loss_critic = torch.square(value_target - value_pred)                           # (B, T-1)
+                    loss_critic = torch.square(batch_returns - value_pred)                           # (B, T-1)
                     loss_critic = loss_critic * batch_gen_output_masks[:, :-1]                      # (B, T-1)  zero out padding + prompt tokens loss
-                    loss_critic = loss_critic.mean()                                                # MSE loss scalar
+                    loss_critic = loss_critic.sum() / num_output_tokens                             # scalar
 
                     # PPO loss
                     loss_ppo = loss_actor + self.config.value_loss_coef * loss_critic               # scalar
