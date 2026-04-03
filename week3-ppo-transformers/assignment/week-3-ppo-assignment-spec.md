@@ -31,3 +31,10 @@ Your training loop must execute the true RL formulation for language:
 *   **Truncation:** Keep maximum generation length constrained (e.g., 16-32 tokens) to streamline memory requirements and debugging iteration speed.
 
 Good luck mapping the continuous optimization mathematics back to discrete vocabulary distributions.
+
+
+# Results:
+PPO training runs at WandB - https://wandb.ai/vijaygkd/ppo-transformers
+see training curves for
+1. Gemma-4-E4B
+2. Qwen-3-0.6B
