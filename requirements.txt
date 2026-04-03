@@ -6,3 +6,5 @@ matplotlib
 transformers
 datasets
 wandb
+flash-attn
+accelerate
