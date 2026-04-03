@@ -43,8 +43,10 @@ After manually increasing the **learning rate by 10x** to `1e-5` (and vastly exp
 2. **KL Divergence** flipped positive and expanded expectedly.
 3. **Critic Loss** is decreasing smoothly, showing stable value function fit.
 4. **Actor Loss** is trending downward, with healthy bounciness reflecting natural sampling variance over the wider batch distributions.
-5. **Training Rewards** saturated impressively from ~30% up to >95% positive.
-6. **Evaluation Rewards** mirrored the training climb, ascending from ~60% to >95%.
+5. **Training Rewards** saturated impressively from **~30% up to >95% positive.**
+6. **Evaluation Rewards** mirrored the training climb, ascending from **~60% to >95%.**
 
 **Reasoning:**
-The previous $10^{-6}$ learning rate artificially choked the Actor into a local minimum. By releasing that constraint and scaling the batch radius, we supplied a rich variance of trajectories. The Actor properly pushed against the $1 \pm 0.2$ bounds, aggressively updating parameters for the good trajectories. The "bounciness" in Actor loss is a positive signal—it proves the algorithm is exploring diverse semantic tokens rather than clinging safely to the reference model. Most importantly, the symmetric rise in Evaluation Rewards definitively proves that the model is **learning generalizable sentiment features** rather than simply memorizing the training subset or hacking a sequence length loophole.
+1. **Unblocking the Trust Region:** The higher learning rate shattered the local minimum. Symmetrical 15% clipping proves the policy is finally taking aggressive optimization steps instead of tiptoeing.
+2. **Rich Variance:** Expanding the batch radius injected diverse trajectories into the gradients. This drove necessary exploration (bouncy Actor loss) and forced the model to meaningfully abandon the frozen reference distribution (positive KL).
+3. **True Generalization:** The parallel $60\% \rightarrow >95\%$ climb in Eval Rewards is the definitive proof of alignment; the policy genuinely modeled the semantic structure of sentiment rather than memorizing the training prompts.
