@@ -65,7 +65,7 @@ class PPOTelemetry:
         for text, reward in zip(texts[:10], rewards[:10]):
             table.add_data(ppo_epoch+1, text, reward)
             
-        wandb.log({f"eval_samples": table}, step=ppo_epoch)
+        wandb.log({f"eval_samples/epoch_{ppo_epoch+1}": table}, step=ppo_epoch)
 
     def finalize_epoch(self):
         """Average inner-loop metrics, flush to history list, and print."""
