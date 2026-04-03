@@ -38,6 +38,29 @@ This document serves as a living repository of counter-intuitive bugs, theoretic
     2. Left-Shifted Action Tensors (Length $T-1$): `log_probs`, `td_errors`, and `advantages`, which map sequentially to the *actions* taken to reach the next state.
 *   **The Fix:** You must create an explicit `gen_output_mask` (Boolean: 1 for generated tokens, 0 for prompt or padding) and apply it relentlessly across your `T-1` action sequences to zero out RL gradient calculations over prompts and padded voids. Only timestamps where the policy actively generated a valid token receive gradient updates.
 
+### 7. The Dual-Nature of Advantage Normalization
+*   **The Gotcha:** You intuitively know you should normalize Advantages ($\mu=0, \sigma=1$) to stabilize training computations. So you instantly normalize the Advantage matrix and use it everywhere.
+*   **The Reality:** The Advantage matrix mathematically serves two completely distinct purposes in the PPO update loop that require entirely different scaling treatments.
+*   **The Dichotomy:**
+    1.  **Actor Policy (Requires Normalization):** For the Actor gradient update, the Advantage acts as a relative scalar weight determining how heavily to maximize the probability ratio. Normalizing it binds the statistical variance of your gradient steps, stabilizing your learning rate regardless of arbitrarily extreme reward distributions.
+    2.  **Value Critic (Requires Raw Data):** For the Critic loss, you construct an absolute scalar Target Return ($V_{old} + \hat{A}_{raw}$). If you build this regression target using normalized advantages, you systematically warp the absolute metric magnitude your critic is evaluating, causing the network's internal values to hopelessly decay and drift.
+*   **The Fix:** Compute your absolute Target Returns analytically using the raw Advantages. Only *after* computing the targets should you normalize the Advantages for the Actor to ingest.
+
+### 8. The PPO Generation Strategy (Batches vs. Epochs & Prompt Diversity)
+*   **The Gotcha:** You might intuitively want to generate rollouts over your entire dataset (e.g., 50,000 prompts) before running updates, or generate multiple rollouts per prompt.
+*   **The Reality:** PPO thrives on rapid feedback and strict baseline comparisons. 
+    1. **Rollout Batches:** Computing rollouts across the complete dataset delays the gradient loop. By the time the trainer analyzes the last sequence, it is updating against mathematically stale probabilities.
+    2. **Rollouts per Prompt:** You strictly want 1 rollout per prompt in PPO. A separate Critic network establishes the value baseline. In algorithms like GRPO, 8-16 rollouts are required because it drops the Critic entirely and relies on the mean reward of those specific rollouts as its baseline.
+*   **The Fix:** Configure your generator to pull moderately sized rollout chunks (e.g., 512 prompts), enforce exactly 1 rollout per prompt to maximize diversity, execute the learning epochs, and discard the data for fresh inferences.
+
+### 9. Aggressive Vectorization in RL Environments
+*   **The Gotcha:** A naive PPO implementation might use nested `for` loops to iterate over batches, sequences, and timestamps to calculate Rewards, KL penalties, TD Errors, and Advantages.
+*   **The Reality:** Python control flow is slow. Looping over data on the CPU prevents the GPU from parallelizing matrix operations, turning mathematical calculation into the primary training bottleneck.
+*   **Pro tip:** You must aggressively vectorize environment calculations:
+    1. Base variables (like aligning scalar Rewards to the `<EOS>`) should be injected at specified indices via PyTorch tensor mapping methods like `scatter_()` (`scatter` is opposite of what `gather` does)
+    2. TD-errors ($\delta_t = r_t + \gamma V_{t+1} - V_t$) must be calculated as a single monolithic matrix subtraction across the entire `(Batch, SeqLen)` grid instantly.
+    3. The only acceptable `for` loop is the recursive Generalized Advantage Estimate (GAE) calculation, as $A_t$ inherently relies on $A_{t+1}$. Even then, that loop must only iterate over the sequence dimension `T`, remaining strictly vectorized across the massive batch axis `B`.
+
 ## Week 2 - Reward Modeling & Preference Learning
 
 ### 1. The Capacity Bottleneck (Linear Probes vs. Fine-tuning)
