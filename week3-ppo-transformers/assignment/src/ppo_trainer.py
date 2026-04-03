@@ -5,6 +5,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequen
 
 from ppo_model import PPOModel
 from dataset import build_prompt_dataloader
+from telemetry import PPOTelemetry
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
@@ -26,6 +27,8 @@ class TrainingConfig:
     learning_epochs: int            = 4             # number of learning epoch per set of rollouts --> InstructGPT paper uses 4
     batch_size: int                 = 16             # learning loop batch size
     grad_accumulation_steps: int    = 4             # effective batch size = batch_size * gradient_accumulation_steps = 64
+    eval_interval: int              = 10            # run evaluation every N epochs
+    checkpoint_dir: str             = "checkpoints/ppo_final_actor"
     # hyper-parameters
     clip_epsilon: float             = 0.2
     kl_beta: float                  = 0.01
@@ -78,6 +81,17 @@ class PPOTrainer:
             num_workers=4,
             split="train[:32]"
         )
+        print("Loading evaluation dataset...")
+        self.eval_dataloader = build_prompt_dataloader(
+            tokenizer=self.text_tokenizer,
+            dataset_name=config.dataset_name,
+            batch_size=config.gen_batch_size,
+            prompt_token_len=config.prompt_token_len,
+            shuffle=False,
+            num_workers=4,
+            split="test[:128]"  # Holdout set for periodic evaluation
+        )
+        self.logger = PPOTelemetry(config=self.config)
 
     def generate_responses(self):
         """
@@ -136,7 +150,39 @@ class PPOTrainer:
 
         return generated_ids, generated_padding_masks, generated_output_mask, gen_texts_list
 
+    @torch.no_grad()
+    def evaluate(self):
+        """Run standard generation on the unseen eval dataset and compute the mean reward."""
+        self.ppo_model.eval()
+        eval_rewards = []
+        
+        for batch in self.eval_dataloader:
+            input_ids = batch["input_ids"].to(DEVICE)
+            attention_mask = batch["attention_mask"].to(DEVICE)
+            
+            # Generate responses
+            outputs = self.ppo_model.actor_model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=self.config.max_new_tokens,
+                do_sample=True,
+                top_k=50,
+                top_p=0.95,
+                pad_token_id=self.text_tokenizer.pad_token_id,
+            )
+            
+            gen_texts = self.text_tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            rewards = get_sentiment_rewards(
+                texts=gen_texts,
+                reward_model_name=self.config.reward_model_name,
+                batch_size=self.config.reward_batch_size
+            )
+            eval_rewards.append(rewards.mean().item())
+            
+        self.ppo_model.train()
+        return sum(eval_rewards) / len(eval_rewards) if eval_rewards else 0.0
 
+    @torch.no_grad()
     def get_log_probs_and_values(self, model: PPOModel, generation_ids: torch.Tensor, generation_attn_masks: torch.Tensor):
         """
         Compute log probs and values for generated tokens
@@ -336,6 +382,10 @@ class PPOTrainer:
                 )
                 # target for value loss
                 returns = advantages + old_critic_values[:, :-1]                                                    # (num_prompts, T-1)
+                
+                # Log generative environment metrics
+                self.logger.log_generation(ppo_epoch, rewards, kl_penalty, advantages, returns)
+                
                 # IMPORTANT: normalize advantages - used for PPO clipped loss, not for value loss
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
             
@@ -388,6 +438,11 @@ class PPOTrainer:
 
                     # PPO loss
                     loss_ppo = loss_actor + self.config.value_loss_coef * loss_critic               # scalar
+                    
+                    # Track telemetry
+                    clip_fraction = torch.mean((torch.abs(prob_ratio - 1.0) > self.config.clip_epsilon).float())
+                    self.logger.log_learning_step(loss_actor, loss_critic, clip_fraction)
+
                     # -----------------------------------------------------------------------------
 
                     # f. Optimizer step
@@ -402,11 +457,28 @@ class PPOTrainer:
 
                 # end of learning epoch
                 print(f"PPO epoch {ppo_epoch+1} learning epoch {learning_epoch+1}/{self.config.learning_epochs} completed")
+            
+            # 6. Periodic Evaluation
+            if (ppo_epoch + 1) % self.config.eval_interval == 0:
+                print(f"Running periodic evaluation on holdout set...")
+                eval_reward = self.evaluate()
+                self.logger.log_eval(eval_reward)
+                print(f"--> Eval Reward: {eval_reward:.4f}")
+
             # end of output epoch
+            self.logger.finalize_epoch()
             print(f"PPO epoch {ppo_epoch+1}/{self.config.ppo_epochs} completed")
         
         # end of train
-        print("-"*50)
+        self.logger.save_to_csv()
+        self.logger.plot()
+        self.logger.finalize_training()
+        
+        print("Saving final language model checkpoint...")
+        self.ppo_model.actor_model.save_pretrained(self.config.checkpoint_dir)
+        self.text_tokenizer.save_pretrained(self.config.checkpoint_dir)
+        
+        print("-" * 50)
         print(f"PPO training completed")
         
 
