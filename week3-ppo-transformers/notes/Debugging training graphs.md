@@ -49,4 +49,37 @@ After manually increasing the **learning rate by 10x** to `1e-5` (and vastly exp
 **Reasoning:**
 1. **Unblocking the Trust Region:** The higher learning rate shattered the local minimum. Symmetrical 15% clipping proves the policy is finally taking aggressive optimization steps instead of tiptoeing.
 2. **Rich Variance:** Expanding the batch radius injected diverse trajectories into the gradients. This drove necessary exploration (bouncy Actor loss) and forced the model to meaningfully abandon the frozen reference distribution (positive KL).
-3. **True Generalization:** The parallel $60\% \rightarrow >95\%$ climb in Eval Rewards is the definitive proof of alignment; the policy genuinely modeled the semantic structure of sentiment rather than memorizing the training prompts.
+5. **True Generalization:** The parallel $60\% \rightarrow >95\%$ climb in Eval Rewards is the definitive proof of alignment; the policy genuinely modeled the semantic structure of sentiment rather than memorizing the training prompts.
+
+---
+
+## 5. Capacity vs. Optimization Dynamics (Qwen-0.6B vs. Gemma-4B)
+**Observation:**
+During experiments, changing the underlying foundation model parameter count drastically (e.g., swapping a 0.6B Qwen model for a 4B Gemma model) resulted in nearly identical training curves across all metrics (`mean_reward`, `actor_loss`, `mean_kl_penalty`, `clip_fraction`). Both models saturated the maximum reward within the same number of steps and subsequently traced identical KL penalty paths in the latter half of training.
+
+**Reasoning:**
+1. **Reward Saturation on Simple Tasks:** The task (producing a "positive" review) and the associated reward model (`twitter-roberta-base-sentiment`) act as a low-complexity bottleneck. The reward model merely checks for the presence of positive semantic clusters (words without demanding strict grammatical or compositional structural constraints). This makes the task "easy" to hack.
+2. **Capacity is Unnecessary:** A 4B parameter model has significantly higher representational capacity than a 0.6B model. However, because the task is so simple, both models are vastly over-parameterized for it. 
+3. **PPO Constraints Dominate:** Once the reward function saturates rapidly (e.g., at ~0.95), the "learning" process stops being about discovering new semantic patterns and shifts entirely to constraint satisfaction. The objective becomes: *How do we balance the static reward ceiling against the KL divergence penalty and PPO clipping boundaries?* Because both models hit the exact same reward ceiling almost immediately, the trajectories are mechanically forced down the exact same mathematical optimization path dictated by the PPO hyperparameters (`clip_epsilon`, `kl_beta`), completely shadowing the raw differences in model capacity.
+
+To force the larger model (Gemma-4B) to diverge mathematically from the smaller model (Qwen-0.6B) and demonstrate its value, the reward signal must be inherently rigorous and structurally demanding. Moving from basic sentiment classification to complex multi-step reasoning tasks (e.g., mathematical proofs, strictly formatted JSON code generation) would introduce enough friction to break the early saturation barrier. Under a stricter reward landscape, the smaller model's capacity would plateau, and the larger model would trace an elevated, diverging trajectory.
+
+---
+
+## 6. Information Theory of the Critic
+The mechanical convergence of the 4B and 0.6B models uniquely demonstrates the **Reward Function Bottleneck**. 
+In our pipeline, a high-capacity generative brain (e.g., 4B parameters) was being graded by a comparatively tiny 125M parameter linear classifier (RoBERTa). The representational capacity of the Actor vastly exceeded the resolution of the Critic. Therefore, until the Critic is scaled (or replaced by deterministic environment criteria), the Actor is fundamentally constrained by the Critic's narrow understanding of "good" versus "bad."
+
+---
+
+## 7. Conclusion: Telemetry-Driven PPO Debugging
+This pipeline served as a masterclass in physically debugging the PPO trust region using raw telemetry traces rather than black-box guesses.
+
+**The Diagnostic Workflow:**
+1. **Identifying the Local Minima:** We encountered early plateauing where evaluation score flatlined (~60%) and Policy updates seemingly froze. 
+2. **Reading the Math:** Instead of blindly changing architectures, we correctly diagnosed a locked trust region by strictly observing:
+   * **KL Penalty:** Drifting uniformly negative, indicating the model had easily learned "what not to say" but struggled to confidently discover the positive gradient.
+   * **Advantages:** Broadly negative raw TD errors confirmed the Critic was excessively optimistic.
+   * **Clip Fraction:** Hovering practically at $0\%$, proving the policy surrogate objective was rigidly clamped and unable to take meaningful optimization steps.
+3. **The Mechanical Unlock:** We diagnosed the bottleneck as an overly conservative hyperparameter boundary. By aggressively **increasing the learning rate from 1e-6 to 1e-5** and massively blowing up the generation horizon (`gen_batch_size`), we forced the gradient descent out of its statistical rut.
+4. **Validation:** The unlock was mathematically verified exactly as the literature expects—clip fractions bounced tightly between $5\% - 15\%$, KL-divergence climbed positive, and our out-of-distribution Evaluation Rewards perfectly mirrored Training Rewards (converging $60\% \rightarrow >95\%$).

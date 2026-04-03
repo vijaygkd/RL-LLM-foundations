@@ -61,6 +61,19 @@ This document serves as a living repository of counter-intuitive bugs, theoretic
     2. TD-errors ($\delta_t = r_t + \gamma V_{t+1} - V_t$) must be calculated as a single monolithic matrix subtraction across the entire `(Batch, SeqLen)` grid instantly.
     3. The only acceptable `for` loop is the recursive Generalized Advantage Estimate (GAE) calculation, as $A_t$ inherently relies on $A_{t+1}$. Even then, that loop must only iterate over the sequence dimension `T`, remaining strictly vectorized across the massive batch axis `B`.
 
+### 10. Reward Model Capacity Bottleneck (Reward Saturation)
+*   **The Gotcha:** Training a 4B parameter model (Gemma) vs a 0.6B parameter model (Qwen) on the same dataset yields identical optimization curves and identical plateau points.
+*   **The Reality:** A 125M parameter sentiment reward model is too simple to differentiate the capacities of a 0.6B and 4B model. Both actors achieve the maximum reward (~0.95) quickly. Once the reward function saturates, there is no further gradient signal for the larger model to utilize.
+*   **The Rule:** To leverage larger parameter models, the reward landscape must be structurally demanding (e.g., compile-time unit tests for code, formal verifiers for math). A simple reward signal causes PPO optimization to collapse into identical clipping constraints regardless of underlying model size.
+
+### 11. Diagnosing a Frozen PPO Trust Region
+*   **The Gotcha:** The PPO training loop runs without errors, but evaluation scores flatline at baseline levels (~60%) and the policy does not update.
+*   **The Reality:** Training is stuck in a local minimum if the telemetry shows:
+    1.  **KL Divergence:** Drifting negative (the model lowers token probabilities to avoid penalties but fails to locate positive output paths).
+    2.  **Advantages:** Predominantly negative (the Value Critic consistently overestimates returns).
+    3.  **Clip Fraction:** Near 0.0% (the policy updates are too small to ever hit the $1 \pm 0.2$ PPO boundary).
+*   **The Fix:** Increase the learning rate (e.g., `1e-6` to `1e-5`) and increase the generation batch size (e.g., `gen_batch_size=512`). This injects trajectory variance into the batches. A successful optimization step will register a 5% to 15% clip fraction and drive KL divergence positive.
+
 ## Week 2 - Reward Modeling & Preference Learning
 
 ### 1. The Capacity Bottleneck (Linear Probes vs. Fine-tuning)
