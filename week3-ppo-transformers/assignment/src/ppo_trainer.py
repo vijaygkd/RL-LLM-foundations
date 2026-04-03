@@ -34,7 +34,7 @@ class TrainingConfig:
     kl_beta: float                  = 0.01
     gae_gamma: float                = 0.99
     gae_lambda: float               = 0.95
-    value_loss_coef: float          = 1
+    value_loss_coef: float          = 0.1           # PPO paper = 0.5 and TRL default 0.1 prevents Critic (MSE) from overwhelming Actor (Log-Probs)
     # optimizers
     lr: float                       = 1e-6
     max_grad_norm: float            = 1.0
