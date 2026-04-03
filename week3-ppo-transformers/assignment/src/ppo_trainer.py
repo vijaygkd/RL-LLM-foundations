@@ -39,9 +39,6 @@ class TrainingConfig:
     # optimizers
     lr: float                       = 1e-6
     max_grad_norm: float            = 1.0
-    # logging
-    log_freq: int                   = 10
-    save_freq: int                  = 100
     checkpoint_dir: str             = "checkpoints/ppo_final_actor"
 
 
@@ -532,8 +529,6 @@ if __name__ == "__main__":
         ppo_epochs=2,              # debug scale
         batch_size=4,              # debug scale
         eval_interval=1,            # debug scale
-        log_freq=1,
-        save_freq=1
     )
     prod_config = TrainingConfig(
         model_name="Qwen/Qwen3-0.6B",
