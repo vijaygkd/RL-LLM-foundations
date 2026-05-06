@@ -60,6 +60,7 @@ config = TrainingConfig(
     model_name="Qwen/Qwen3-0.6B",
     reward_model_name="week2-reward-models/assignment/reward_model_checkpoint",
     dataset_name="Anthropic/hh-rlhf",
+    prompt_token_len=64,
 )
 
 
@@ -89,6 +90,7 @@ def main():
         model_name="Qwen/Qwen3-0.6B",
         reward_model_name="week2-reward-models/assignment/reward_model_checkpoint",
         dataset_name="Anthropic/hh-rlhf",
+        prompt_token_len=64,
     )
     
     execute_rlhf_loop(config)

@@ -22,9 +22,9 @@ class PromptsDataset(Dataset):
         text = self.texts[idx]
         prompt_marker = "\n\nAssistant:"
         if prompt_marker in text:
-            # Extract everything before the final Assistant marker and re-append the marker
+            # Extract only the very first turn and drop the rest of the conversation
             prompt_parts = text.split(prompt_marker)
-            return prompt_marker.join(prompt_parts[:-1]) + prompt_marker
+            return prompt_parts[0] + prompt_marker
         return text
 
 
@@ -37,6 +37,7 @@ class PromptCollator:
 
     def __init__(self, tokenizer: PreTrainedTokenizer, prompt_token_len: int = 8):
         self.tokenizer = tokenizer
+        self.tokenizer.truncation_side = "left"
         self.prompt_token_len = prompt_token_len
 
     def __call__(self, batch: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
