@@ -18,7 +18,8 @@ class TrainingConfig:
     model_name: str
     reward_model_name: str
     # dataset
-    dataset_name: str               = "stanfordnlp/imdb"
+    dataset_name: str               = "Anthropic/hh-rlhf"
+    text_column: str                = "chosen"
     num_prompts: int                = 2048             # rollout dataset size
     gen_batch_size: int             = 512               
     reward_batch_size: int          = 512
@@ -80,7 +81,8 @@ class PPOTrainer:
             prompt_token_len=config.prompt_token_len,
             shuffle=True,
             num_workers=4,
-            split="train"
+            split="train",
+            text_column=config.text_column
         )
         print("Loading evaluation dataset...")
         self.eval_dataloader = build_prompt_dataloader(
@@ -90,7 +92,8 @@ class PPOTrainer:
             prompt_token_len=config.prompt_token_len,
             shuffle=False,
             num_workers=4,
-            split="test[:128]"  # Holdout set for periodic evaluation
+            split="test[:128]",  # Holdout set for periodic evaluation
+            text_column=config.text_column
         )
         self.logger = PPOTelemetry(config=self.config)
         if torch.cuda.is_available():

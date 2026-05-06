@@ -11,7 +11,7 @@ class PromptsDataset(Dataset):
     is applied cleanly at the batch level.
     """
 
-    def __init__(self, dataset_name: str, split: str = "train", text_column: str = "text"):
+    def __init__(self, dataset_name: str, split: str = "train", text_column: str = "chosen"):
         dataset = load_dataset(dataset_name, split=split)
         self.texts = dataset[text_column]
 
@@ -19,7 +19,13 @@ class PromptsDataset(Dataset):
         return len(self.texts)
 
     def __getitem__(self, idx: int) -> str:
-        return self.texts[idx]
+        text = self.texts[idx]
+        prompt_marker = "\n\nAssistant:"
+        if prompt_marker in text:
+            # Extract everything before the final Assistant marker and re-append the marker
+            prompt_parts = text.split(prompt_marker)
+            return prompt_marker.join(prompt_parts[:-1]) + prompt_marker
+        return text
 
 
 class PromptCollator:
