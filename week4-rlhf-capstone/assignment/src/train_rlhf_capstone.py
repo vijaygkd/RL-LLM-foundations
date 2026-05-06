@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
 # Note: The core PPO loops and architectures will be imported from Week 3
-from week3_ppo_transformers.assignment.src.ppo_trainer import PPOTrainer
+from ppo.ppo_trainer import PPOTrainer, TrainingConfig
 
 
 def load_target_and_reference_policies(actor_model_name: str) -> Tuple[PreTrainedModel, PreTrainedModel, PreTrainedTokenizer]:
@@ -56,55 +56,42 @@ def build_dataloader(dataset_name: str, batch_size: int, tokenizer: PreTrainedTo
     pass
 
 
-def execute_rlhf_loop(
-    actor: PreTrainedModel,
-    ref_policy: PreTrainedModel,
-    critic: PreTrainedModel,
-    dataloader: DataLoader,
-    beta: float,
-    num_epochs: int,
-    gradient_accumulation_steps: int
-) -> None:
+config = TrainingConfig(
+    model_name="Qwen/Qwen3-0.6B",
+    reward_model_name="week2-reward-models/assignment/reward_model_checkpoint",
+    dataset_name="Anthropic/hh-rlhf",
+)
+
+
+def execute_rlhf_loop(config: TrainingConfig) -> None:
     """
     The core PPO optimization loop.
-    
-    Args:
-        actor: Tunable policy $\pi_\theta$.
-        ref_policy: Frozen baseline $\pi_{ref}$.
-        critic: Frozen reward critic $R_\phi$.
-        dataloader: Unlabeled prompt distribution for generation.
-        beta: KL-Divergence penalty coefficient.
-        num_epochs: Number of complete passes over the prompt distribution.
-        gradient_accumulation_steps: Micro-batches before optimization step.
     """
-    # TODO: Initialize PPO orchestrator.
-    
-    for epoch in range(num_epochs):
-        for batch_idx, prompts in enumerate(dataloader):
-            # Step 1: Trajectory Rollout (Generate using actor).
-            # Step 2: Reward Assessment (Evaluate generated trajectories with critic).
-            # Step 3: Compute KL-based pseudo-reward (incorporating beta).
-            # Step 4: Advantage Estimation (GAE).
-            # Step 5: Policy Update (PPO objective & value function regression).
-            # Step 6: Log metrics (mean reward, KL divergence, generation length).
-            pass
-
+    trainer = PPOTrainer(config)
+    # trainer.train()
+    print("Initializing RLHF Pipeline...")
 
 def main():
-    parser = argparse.ArgumentParser(description="Week 4 Capstone: Classic RLHF Pipeline")
-    parser.add_argument("--actor_model", type=str, required=True, help="Path to SFT model")
-    parser.add_argument("--reward_model", type=str, required=True, help="Path to Preference model")
-    parser.add_argument("--dataset", type=str, default="Anthropic/hh-rlhf", help="Prompt dataset")
-    parser.add_argument("--beta", type=float, default=0.05, help="KL Divergence penalty coefficient")
-    parser.add_argument("--batch_size", type=int, default=8, help="Rollout batch size")
-    parser.add_argument("--epochs", type=int, default=1, help="Optimization epochs")
-    parser.add_argument("--grad_accum", type=int, default=4, help="Gradient accumulation steps")
+    # parser = argparse.ArgumentParser(description="Week 4 Capstone: Classic RLHF Pipeline")
+    # parser.add_argument("--actor_model", type=str, required=True, help="Path to SFT model")
+    # parser.add_argument("--reward_model", type=str, required=True, help="Path to Preference model")
+    # parser.add_argument("--dataset", type=str, default="Anthropic/hh-rlhf", help="Prompt dataset")
+    # parser.add_argument("--beta", type=float, default=0.05, help="KL Divergence penalty coefficient")
+    # parser.add_argument("--batch_size", type=int, default=8, help="Rollout batch size")
+    # parser.add_argument("--epochs", type=int, default=1, help="Optimization epochs")
+    # parser.add_argument("--grad_accum", type=int, default=4, help="Gradient accumulation steps")
     
-    args = parser.parse_args()
+    # args = parser.parse_args()
     
-    print(f"Initializing RLHF Pipeline with KL coefficient $\beta$ = {args.beta}...")
+    # print(f"Initializing RLHF Pipeline with KL coefficient $\beta$ = {args.beta}...")
+
+    config = TrainingConfig(
+        model_name="Qwen/Qwen3-0.6B",
+        reward_model_name="week2-reward-models/assignment/reward_model_checkpoint",
+        dataset_name="Anthropic/hh-rlhf",
+    )
     
-    # Execution graph initiation...
+    execute_rlhf_loop(config)
 
 
 if __name__ == "__main__":
