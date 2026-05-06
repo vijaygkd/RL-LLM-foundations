@@ -10,7 +10,7 @@ from ppo.ppo_trainer import PPOTrainer, TrainingConfig
 
 
 def load_target_and_reference_policies(actor_model_name: str) -> Tuple[PreTrainedModel, PreTrainedModel, PreTrainedTokenizer]:
-    """
+    r"""
     Initialize the primary actor policy and freeze a copy as the reference policy.
     
     Args:
@@ -27,7 +27,7 @@ def load_target_and_reference_policies(actor_model_name: str) -> Tuple[PreTraine
 
 
 def load_reward_model(reward_model_name: str) -> PreTrainedModel:
-    """
+    r"""
     Initialize the preference scalar model (Critic $R_\phi$).
     
     Args:
@@ -83,7 +83,7 @@ def main():
     
     # args = parser.parse_args()
     
-    # print(f"Initializing RLHF Pipeline with KL coefficient $\beta$ = {args.beta}...")
+    # print(rf"Initializing RLHF Pipeline with KL coefficient $\beta$ = {args.beta}...")
 
     config = TrainingConfig(
         model_name="Qwen/Qwen3-0.6B",

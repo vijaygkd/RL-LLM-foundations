@@ -1,7 +1,10 @@
+import os
 from dataclasses import dataclass
 import time
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+from safetensors.torch import load_file
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification
 
@@ -66,11 +69,29 @@ class PPOTrainer:
         # reward model setup
         print("Loading reward model... ", config.reward_model_name)
         self.reward_tokenizer = AutoTokenizer.from_pretrained(config.reward_model_name)
-        # TODO - can this load the reward model trained in week 2?
+        
+        # 1. Load native Sequence Classification architecture
         self.reward_model = AutoModelForSequenceClassification.from_pretrained(
             config.reward_model_name,
-            dtype=torch.bfloat16
-        ).to(DEVICE).requires_grad_(False)
+            num_labels=1,
+            dtype=torch.bfloat16,
+            ignore_mismatched_sizes=True
+        )
+        self.reward_model.config.pad_token_id = self.reward_tokenizer.pad_token_id
+        
+        # 2. Load the raw safetensors and perform surgical tensor mapping
+        sf_path = os.path.join(config.reward_model_name, "model.safetensors")
+        if os.path.exists(sf_path):
+            state_dict = load_file(sf_path)
+            if 'lm_head.weight' in state_dict:
+                state_dict['score.weight'] = state_dict.pop('lm_head.weight')
+                state_dict['score.bias'] = state_dict.pop('lm_head.bias')
+            
+            # Load patched dictionary
+            self.reward_model.load_state_dict(state_dict, strict=False)
+            print(f"---> Successfully loaded reward model from safetensors: {sf_path}")
+            
+        self.reward_model = self.reward_model.to(DEVICE).requires_grad_(False)
         # -------------------------------------
         # Dataset
         print("Loading dataset... ", config.dataset_name)
@@ -528,11 +549,15 @@ def get_sentiment_rewards(generated_texts: list[str], reward_model, reward_token
                 return_tensors="pt", 
                 padding=True, 
                 truncation=True).to(DEVICE)
-            outputs = reward_model(**encoded).logits            # (b, 3)    Labels: 0 -> Negative; 1 -> Neutral; 2 -> Positive
-            # Convert to probabilities to bound the reward signal strictly between [0, 1]
-            probs = torch.softmax(outputs, dim=-1)              # (b, 3)
-            positive_score = probs[:, 2]                        # (b,)
-            rewards.append(positive_score)
+            outputs = reward_model(**encoded)
+            # The SequenceClassification architecture automatically pools the last non-padded token
+            # and returns logits of shape (B, 1).
+            batch_rewards = outputs.logits.squeeze(-1)  # (B,)
+            
+            # TODO: (Optional) Apply sigmoid or keep raw logits. RLHF often uses raw logits as rewards.
+            # batch_rewards = torch.sigmoid(batch_rewards) 
+            
+            rewards.append(batch_rewards)
     return torch.cat(rewards)                                   # (B,)
 
 

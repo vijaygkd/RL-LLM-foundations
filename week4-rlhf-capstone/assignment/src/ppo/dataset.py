@@ -54,6 +54,7 @@ def build_prompt_dataloader(
     tokenizer: PreTrainedTokenizer,
     dataset_name: str = "stanfordnlp/imdb",
     split: str = "train",
+    text_column: str = "text",
     batch_size: int = 16,
     prompt_token_len: int = 8,
     shuffle: bool = True,
@@ -75,7 +76,7 @@ def build_prompt_dataloader(
         A DataLoader yielding (input_ids, attention_mask) tuples of shape
         (batch_size, prompt_token_len).
     """
-    dataset = PromptsDataset(dataset_name=dataset_name, split=split)
+    dataset = PromptsDataset(dataset_name=dataset_name, split=split, text_column=text_column)
     collator = PromptCollator(tokenizer=tokenizer, prompt_token_len=prompt_token_len)
     return DataLoader(
         dataset,

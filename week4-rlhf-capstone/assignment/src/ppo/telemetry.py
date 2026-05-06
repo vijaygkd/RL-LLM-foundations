@@ -3,14 +3,14 @@ import os
 import wandb
 
 class PPOTelemetry:
-    def __init__(self, config=None, log_dir="logs", use_wandb=True):
+    def __init__(self, config=None, log_dir="logs", use_wandb=False):
         self.log_dir = log_dir
         os.makedirs(log_dir, exist_ok=True)
         self.metrics_history = []
         self.use_wandb = use_wandb
 
         if self.use_wandb:
-            wandb.init(project="ppo-transformers", config=config.__dict__ if config else None)
+            wandb.init(project="rlhf_capstone", config=config.__dict__ if config else None)
         
         # Current epoch accumulators
         self.current_epoch_metrics = {}
