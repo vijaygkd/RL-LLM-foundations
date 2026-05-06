@@ -35,7 +35,7 @@ class PromptCollator:
     Passed directly to DataLoader as `collate_fn`.
     """
 
-    def __init__(self, tokenizer: PreTrainedTokenizer, prompt_token_len: int = 8):
+    def __init__(self, tokenizer: PreTrainedTokenizer, prompt_token_len: int = 64):
         self.tokenizer = tokenizer
         self.tokenizer.truncation_side = "left"
         self.prompt_token_len = prompt_token_len
@@ -57,7 +57,7 @@ def build_prompt_dataloader(
     split: str = "train",
     text_column: str = "text",
     batch_size: int = 16,
-    prompt_token_len: int = 8,
+    prompt_token_len: int = 64,
     shuffle: bool = True,
     num_workers: int = 0,
 ) -> DataLoader:
