@@ -146,7 +146,10 @@ class PPOTrainer:
                     input_ids.to(DEVICE),                                   # (B, T_prompt)
                     attention_mask=input_attn_mask.to(DEVICE),              # can be left padded during generation
                     do_sample=True, 
-                    max_new_tokens=self.config.max_new_tokens)
+                    max_new_tokens=self.config.max_new_tokens,
+                    pad_token_id=self.text_tokenizer.pad_token_id,
+                    eos_token_id=self.text_tokenizer.eos_token_id
+                )
                 generated_texts = self.text_tokenizer.batch_decode(
                     generation_ids, skip_special_tokens=True
                 )
@@ -202,10 +205,11 @@ class PPOTrainer:
                 top_k=50,
                 top_p=0.95,
                 pad_token_id=self.text_tokenizer.pad_token_id,
+                eos_token_id=self.text_tokenizer.eos_token_id,
             )
             
             gen_texts = self.text_tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            rewards = get_sentiment_rewards(
+            rewards = get_hh_rewards(
                 gen_texts,
                 self.reward_model, 
                 self.reward_tokenizer, 
@@ -535,10 +539,10 @@ class PPOTrainer:
 # PPOTrainer should be reward-agnostic
 ########################################
 @torch.no_grad()
-def get_sentiment_rewards(generated_texts: list[str], reward_model, reward_tokenizer, reward_batch_size=4):
+def get_hh_rewards(generated_texts: list[str], reward_model, reward_tokenizer, reward_batch_size=4):
     """
-    Return scalar sentiment reward for each generated text
-    Reward = Degree of positivity
+    Return scalar reward for each generated text
+    Reward = helpfulness score
     """
 
     rewards = []
@@ -554,8 +558,8 @@ def get_sentiment_rewards(generated_texts: list[str], reward_model, reward_token
             # and returns logits of shape (B, 1).
             batch_rewards = outputs.logits.squeeze(-1)  # (B,)
             
-            # TODO: (Optional) Apply sigmoid or keep raw logits. RLHF often uses raw logits as rewards.
-            # batch_rewards = torch.sigmoid(batch_rewards) 
+            # (Optional) Apply sigmoid or keep raw logits. RLHF often uses raw logits as rewards.
+            batch_rewards = torch.sigmoid(batch_rewards) 
             
             rewards.append(batch_rewards)
     return torch.cat(rewards)                                   # (B,)

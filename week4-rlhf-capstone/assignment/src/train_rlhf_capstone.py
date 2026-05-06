@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
 # Note: The core PPO loops and architectures will be imported from Week 3
-from ppo.ppo_trainer import PPOTrainer, TrainingConfig
+from ppo.ppo_trainer import PPOTrainer, TrainingConfig, get_hh_rewards
 
 
 def load_target_and_reference_policies(actor_model_name: str) -> Tuple[PreTrainedModel, PreTrainedModel, PreTrainedTokenizer]:
@@ -69,8 +69,18 @@ def execute_rlhf_loop(config: TrainingConfig) -> None:
     The core PPO optimization loop.
     """
     trainer = PPOTrainer(config)
-    # trainer.train()
     print("Initializing RLHF Pipeline...")
+    print("Generating responses...")
+    generated_ids, gen_padding_masks, gen_output_masks, gen_texts_list = trainer.generate_responses()
+    print("Rewarding responses...")
+    rewards = get_hh_rewards(gen_texts_list, trainer.reward_model, trainer.reward_tokenizer, config.reward_batch_size)    # (num_prompts,)
+
+    for i in range(len(gen_texts_list)):
+        print(f"Response {i+1}: {gen_texts_list[i]}")
+        print(f"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Reward: {rewards[i]} ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    print("-"*100)
+
+
 
 def main():
     # parser = argparse.ArgumentParser(description="Week 4 Capstone: Classic RLHF Pipeline")
@@ -89,8 +99,13 @@ def main():
     config = TrainingConfig(
         model_name="Qwen/Qwen3-0.6B",
         reward_model_name="week2-reward-models/assignment/reward_model_checkpoint",
+        # dataset
         dataset_name="Anthropic/hh-rlhf",
-        prompt_token_len=64,
+        prompt_token_len=32,
+        num_prompts=16,             # rollout dataset size
+        gen_batch_size=4,
+        reward_batch_size=4,
+        max_new_tokens=128,
     )
     
     execute_rlhf_loop(config)

@@ -38,6 +38,7 @@ class PromptCollator:
     def __init__(self, tokenizer: PreTrainedTokenizer, prompt_token_len: int = 64):
         self.tokenizer = tokenizer
         self.tokenizer.truncation_side = "left"
+        self.tokenizer.padding_side = "left"
         self.prompt_token_len = prompt_token_len
 
     def __call__(self, batch: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
