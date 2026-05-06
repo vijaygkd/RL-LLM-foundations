@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
 # Note: The core PPO loops and architectures will be imported from Week 3
-# from ppo_trainer import PPOTrainer
+from week3_ppo_transformers.assignment.src.ppo_trainer import PPOTrainer
 
 
 def load_target_and_reference_policies(actor_model_name: str) -> Tuple[PreTrainedModel, PreTrainedModel, PreTrainedTokenizer]:
